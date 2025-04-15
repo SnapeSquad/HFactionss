@@ -1,0 +1,193 @@
+# factions.yml - Хранилище данных о фракциях HFactions
+# ---
+# Структура Ранга:
+#   ID_Ранга (1-11):
+#     defaultName: "Название по умолчанию" # Неизменяемое базовое имя
+#     displayName: "Отображаемое имя" # Может меняться лидером (/hf manageranks)
+#     salary: Сумма_Зарплаты        # Число (например, 500.0)
+#     permissions:                  # Список дополнительных прав для этого ранга
+#       - hfactions.право1
+#       - hfactions.право2.подправо
+# ---
+factions:
+  # --- Государственные Фракции ---
+  news:
+    name: "Weazel News"
+    type: STATE
+    color: "#FF0000"
+    prefix: "&c[NEWS]"
+    balance: 75000.0
+    warehouse: { size: 54, items: [] }
+    ranks:
+      1: { defaultName: "Стажер", displayName: "Стажер", salary: 300.0, permissions: [] }
+      2: { defaultName: "Репортер", displayName: "Репортер", salary: 400.0, permissions: [] }
+      3: { defaultName: "Фотограф", displayName: "Фотограф", salary: 450.0, permissions: [] }
+      4: { defaultName: "Ведущий", displayName: "Ведущий", salary: 550.0, permissions: [] }
+      5: { defaultName: "Редактор", displayName: "Редактор", salary: 700.0, permissions: [hfactions.faction.invite] } # Пример: может приглашать
+      6: { defaultName: "Гл. Редактор", displayName: "Гл. Редактор", salary: 850.0, permissions: [hfactions.faction.invite] }
+      7: { defaultName: "Продюсер", displayName: "Продюсер", salary: 1000.0, permissions: [hfactions.faction.invite, hfactions.faction.kick] } # Может кикать
+      8: { defaultName: "Зам. Директора", displayName: "Зам. Директора", salary: 1200.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] } # Повышать/понижать
+      9: { defaultName: "Тех. Директор", displayName: "Тех. Директор", salary: 1400.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Программный Директор", displayName: "Программный Директор", salary: 1700.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] } # Может ставить ранг
+      11: { defaultName: "Ген. Директор", displayName: "Ген. Директор", salary: 2500.0, permissions: [hfactions.leader, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance] } # Полные права лидера (кроме админских)
+
+  gov:
+    name: "Government"
+    type: STATE
+    color: "#000000" # Черный цвет может плохо читаться, возможно, лучше серый?
+    prefix: "&8[GOV]" # Используем темно-серый код &8
+    balance: 200000.0
+    warehouse: { size: 54, items: [] }
+    ranks:
+      1: { defaultName: "Стажер", displayName: "Стажер", salary: 400.0, permissions: [] }
+      2: { defaultName: "Охранник", displayName: "Охранник", salary: 500.0, permissions: [] }
+      3: { defaultName: "Агент СБ", displayName: "Агент СБ", salary: 600.0, permissions: [] }
+      4: { defaultName: "Секретарь", displayName: "Секретарь", salary: 700.0, permissions: [] }
+      5: { defaultName: "Юрист", displayName: "Юрист", salary: 850.0, permissions: [] }
+      6: { defaultName: "Прокурор", displayName: "Прокурор", salary: 1000.0, permissions: [hfactions.faction.invite] }
+      7: { defaultName: "Судья", displayName: "Судья", salary: 1200.0, permissions: [hfactions.faction.invite] }
+      8: { defaultName: "Адвокат", displayName: "Адвокат", salary: 1400.0, permissions: [hfactions.faction.invite, hfactions.faction.kick] }
+      9: { defaultName: "Министр", displayName: "Министр", salary: 1700.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Вице-Губернатор", displayName: "Вице-Губернатор", salary: 2200.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Губернатор", displayName: "Губернатор", salary: 3500.0, permissions: [hfactions.leader, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance] }
+
+  pd:
+    name: "Police Department"
+    type: STATE
+    color: "#0000FF"
+    prefix: "&1[PD]"
+    balance: 120000.0
+    warehouse: { size: 270, items: [] } # Большой склад для PD
+    ranks:
+      1: { defaultName: "Кадет", displayName: "Кадет", salary: 500.0, permissions: [] }
+      2: { defaultName: "Офицер I", displayName: "Офицер I", salary: 600.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol] } # Может штрафовать и крафтить протокол
+      3: { defaultName: "Офицер II", displayName: "Офицер II", salary: 700.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol] }
+      4: { defaultName: "Офицер III", displayName: "Офицер III", salary: 800.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs] } # Может крафтить наручники
+      5: { defaultName: "Сержант I", displayName: "Сержант I", salary: 950.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite] } # Может крафтить тайзер и приглашать
+      6: { defaultName: "Сержант II", displayName: "Сержант II", salary: 1100.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite] }
+      7: { defaultName: "Детектив", displayName: "Детектив", salary: 1250.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick] } # Может кикать
+      8: { defaultName: "Лейтенант", displayName: "Лейтенант", salary: 1450.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      9: { defaultName: "Капитан", displayName: "Капитан", salary: 1700.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Зам. Шерифа", displayName: "Зам. Шерифа", salary: 2100.0, permissions: [hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Шериф", displayName: "Шериф", salary: 3000.0, permissions: [hfactions.leader, hfactions.pd.fine, hfactions.craft.protocol, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance, hfactions.admin.territory] } # Может управлять территориями? Или отдельное право?
+
+  ems:
+    name: "Emergency Medical Services"
+    type: STATE
+    color: "#DC143C"
+    prefix: "&c[EMS]"
+    balance: 80000.0
+    warehouse: { size: 108, items: [] }
+    ranks:
+      1: { defaultName: "Интерн", displayName: "Интерн", salary: 450.0, permissions: [] }
+      2: { defaultName: "Парамедик", displayName: "Парамедик", salary: 550.0, permissions: [hfactions.ems.heal.use] } # Может лечить
+      3: { defaultName: "Фельдшер", displayName: "Фельдшер", salary: 650.0, permissions: [hfactions.ems.heal.use] }
+      4: { defaultName: "Спасатель", displayName: "Спасатель", salary: 750.0, permissions: [hfactions.ems.heal.use, hfactions.ems.revive.use] } # Может реанимировать
+      5: { defaultName: "Хирург", displayName: "Хирург", salary: 900.0, permissions: [hfactions.ems.heal.use, hfactions.ems.revive.use, hfactions.faction.invite] }
+      6: { defaultName: "Терапевт", displayName: "Терапевт", salary: 1050.0, permissions: [hfactions.ems.heal.use, hfactions.ems.revive.use, hfactions.faction.invite] }
+      7: { defaultName: "Специалист", displayName: "Специалист", salary: 1200.0, permissions: [hfactions.ems.heal.use, hfactions.ems.revive.use, hfactions.faction.invite, hfactions.faction.kick] }
+      8: { defaultName: "Зав. Отделением", displayName: "Зав. Отделением", salary: 1400.0, permissions: [hfactions.ems.heal.use, hfactions.ems.revive.use, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      9: { defaultName: "Инспектор", displayName: "Инспектор", salary: 1650.0, permissions: [hfactions.ems.heal.use, hfactions.ems.revive.use, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Зам. Главврача", displayName: "Зам. Главврача", salary: 2000.0, permissions: [hfactions.ems.heal.use, hfactions.ems.revive.use, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Главврач", displayName: "Главврач", salary: 2800.0, permissions: [hfactions.leader, hfactions.ems.heal.use, hfactions.ems.revive.use, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance] }
+
+  fib:
+    name: "Federal Investigation Bureau"
+    type: STATE
+    color: "#00008B"
+    prefix: "&9[FIB]"
+    balance: 150000.0
+    warehouse: { size: 54, items: [] }
+    ranks:
+      1: { defaultName: "Стажер", displayName: "Стажер", salary: 600.0, permissions: [] }
+      2: { defaultName: "Мл. Агент", displayName: "Мл. Агент", salary: 700.0, permissions: [] }
+      3: { defaultName: "Агент", displayName: "Агент", salary: 800.0, permissions: [] }
+      4: { defaultName: "Ст. Агент", displayName: "Ст. Агент", salary: 950.0, permissions: [hfactions.craft.handcuffs] } # Крафт наручников
+      5: { defaultName: "Спец. Агент", displayName: "Спец. Агент", salary: 1100.0, permissions: [hfactions.craft.handcuffs, hfactions.craft.taser] } # Крафт тайзера
+      6: { defaultName: "Глава Отдела", displayName: "Глава Отдела", salary: 1300.0, permissions: [hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite] }
+      7: { defaultName: "Инспектор", displayName: "Инспектор", salary: 1500.0, permissions: [hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick] }
+      8: { defaultName: "Куратор", displayName: "Куратор", salary: 1750.0, permissions: [hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      9: { defaultName: "Агент IC", displayName: "Агент IC", salary: 2000.0, permissions: [hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Зам. Директора", displayName: "Зам. Директора", salary: 2500.0, permissions: [hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Директор", displayName: "Директор", salary: 3500.0, permissions: [hfactions.leader, hfactions.craft.handcuffs, hfactions.craft.taser, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance, hfactions.admin.territory] } # Может управлять территориями?
+
+  # --- Криминальные Фракции ---
+  cartel:
+    name: "The Crimson Cartel"
+    type: CRIMINAL
+    color: "#8B0000"
+    prefix: "&4[Cartel]"
+    balance: 50000.0
+    warehouse: { size: 54, items: [] }
+    ranks:
+      1: { defaultName: "Пешка", displayName: "Пешка", salary: 100.0, permissions: [] }
+      2: { defaultName: "Боец", displayName: "Боец", salary: 150.0, permissions: [] }
+      3: { defaultName: "Головорез", displayName: "Головорез", salary: 200.0, permissions: [] }
+      4: { defaultName: "Торговец", displayName: "Торговец", salary: 250.0, permissions: [] }
+      5: { defaultName: "Контрабандист", displayName: "Контрабандист", salary: 300.0, permissions: [] }
+      6: { defaultName: "Лейтенант", displayName: "Лейтенант", salary: 400.0, permissions: [hfactions.faction.invite] }
+      7: { defaultName: "Капитан", displayName: "Капитан", salary: 500.0, permissions: [hfactions.faction.invite] }
+      8: { defaultName: "Советник", displayName: "Советник", salary: 650.0, permissions: [hfactions.faction.invite, hfactions.faction.kick] }
+      9: { defaultName: "Правая Рука", displayName: "Правая Рука", salary: 800.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Подбосс", displayName: "Подбосс", salary: 1000.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Эль Хефе", displayName: "Эль Хефе", salary: 1500.0, permissions: [hfactions.leader, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance] }
+
+  syndicate:
+    name: "Shadow Syndicate"
+    type: CRIMINAL
+    color: "#696969"
+    prefix: "&8[Synd.]"
+    balance: 45000.0
+    warehouse: { size: 54, items: [] }
+    ranks:
+      1: { defaultName: "Сошка", displayName: "Сошка", salary: 110.0, permissions: [] }
+      2: { defaultName: "Исполнитель", displayName: "Исполнитель", salary: 160.0, permissions: [] }
+      3: { defaultName: "Наемник", displayName: "Наемник", salary: 210.0, permissions: [] }
+      4: { defaultName: "Информатор", displayName: "Информатор", salary: 260.0, permissions: [] }
+      5: { defaultName: "Агент", displayName: "Агент", salary: 310.0, permissions: [] }
+      6: { defaultName: "Куратор", displayName: "Куратор", salary: 410.0, permissions: [hfactions.faction.invite] }
+      7: { defaultName: "Наставник", displayName: "Наставник", salary: 510.0, permissions: [hfactions.faction.invite] }
+      8: { defaultName: "Аналитик", displayName: "Аналитик", salary: 660.0, permissions: [hfactions.faction.invite, hfactions.faction.kick] }
+      9: { defaultName: "Вербовщик", displayName: "Вербовщик", salary: 810.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Стратег", displayName: "Стратег", salary: 1050.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Теневой Лорд", displayName: "Теневой Лорд", salary: 1600.0, permissions: [hfactions.leader, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance] }
+
+  vipers:
+    name: "Emerald Vipers"
+    type: CRIMINAL
+    color: "#008000"
+    prefix: "&2[Vipers]"
+    balance: 40000.0
+    warehouse: { size: 54, items: [] }
+    ranks:
+      1: { defaultName: "Щенок", displayName: "Щенок", salary: 90.0, permissions: [] }
+      2: { defaultName: "Гадюка", displayName: "Гадюка", salary: 140.0, permissions: [] }
+      3: { defaultName: "Кобра", displayName: "Кобра", salary: 190.0, permissions: [] }
+      4: { defaultName: "Аспид", displayName: "Аспид", salary: 240.0, permissions: [] }
+      5: { defaultName: "Анаконда", displayName: "Анаконда", salary: 290.0, permissions: [] }
+      6: { defaultName: "Смотритель", displayName: "Смотритель", salary: 390.0, permissions: [hfactions.faction.invite] }
+      7: { defaultName: "Бригадир", displayName: "Бригадир", salary: 490.0, permissions: [hfactions.faction.invite] }
+      8: { defaultName: "Капо", displayName: "Капо", salary: 640.0, permissions: [hfactions.faction.invite, hfactions.faction.kick] }
+      9: { defaultName: "Наместник", displayName: "Наместник", salary: 790.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Консильери", displayName: "Консильери", salary: 1000.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Король Змей", displayName: "Король Змей", salary: 1400.0, permissions: [hfactions.leader, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance] }
+
+  cobras: # Последняя криминальная, Azure Cobras
+    name: "Azure Cobras"
+    type: CRIMINAL
+    color: "#008B8B"
+    prefix: "&3[Cobras]"
+    balance: 42000.0
+    warehouse: { size: 54, items: [] }
+    ranks:
+      1: { defaultName: "Новичок", displayName: "Новичок", salary: 95.0, permissions: [] }
+      2: { defaultName: "Шнырь", displayName: "Шнырь", salary: 145.0, permissions: [] }
+      3: { defaultName: "Боевик", displayName: "Боевик", salary: 195.0, permissions: [] }
+      4: { defaultName: "Вышибала", displayName: "Вышибала", salary: 245.0, permissions: [] }
+      5: { defaultName: "Громила", displayName: "Громила", salary: 295.0, permissions: [] }
+      6: { defaultName: "Уличный Босс", displayName: "Уличный Босс", salary: 395.0, permissions: [hfactions.faction.invite] }
+      7: { defaultName: "Казначей", displayName: "Казначей", salary: 495.0, permissions: [hfactions.faction.invite] } # Может иметь доступ к деньгам?
+      8: { defaultName: "Младший Лейтенант", displayName: "Младший Лейтенант", salary: 645.0, permissions: [hfactions.faction.invite, hfactions.faction.kick] }
+      9: { defaultName: "Старший Лейтенант", displayName: "Старший Лейтенант", salary: 795.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote] }
+      10: { defaultName: "Капитан Кобр", displayName: "Капитан Кобр", salary: 1020.0, permissions: [hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank] }
+      11: { defaultName: "Дон Кобра", displayName: "Дон Кобра", salary: 1450.0, permissions: [hfactions.leader, hfactions.faction.invite, hfactions.faction.kick, hfactions.faction.promote, hfactions.faction.demote, hfactions.faction.setrank, hfactions.faction.manage_ranks, hfactions.faction.manage_balance] }

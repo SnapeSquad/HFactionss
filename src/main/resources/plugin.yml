@@ -1,0 +1,156 @@
+# Основная информация
+name: HFactions
+version: ${project.version} # Версия берется из pom.xml
+main: org.isyateq.hfactions.HFactions
+api-version: '1.21.3' # Указываем API версию Minecraft/Paper
+author: Isyateq
+description: Factions.
+load: STARTUP # Загружать при старте сервера
+# Зависимости (мягкие - плагин загрузится, но функционал будет ограничен)
+softdepend: [Vault, LuckPerms, dynmap, Oraxen]
+
+# Команды
+commands:
+  hfactions:
+    description: Main command for HFactions.
+    usage: /<command> [subcommand] [args]
+    aliases: [hf, faction, f]
+  # Алиасы (можно убрать, т.к. регистрируются программно)
+  fc:
+    description: Toggle faction chat.
+    usage: /fc
+  fchat:
+    description: Toggle faction chat.
+    usage: /fchat
+  fine:
+    description: Issue a fine (PD only).
+    usage: /fine <player> <amount> <reason>
+    fg:
+  fg:
+    description: Open the main faction GUI.
+    usage: /fg
+permissions:
+  # --- Базовые ---
+  hfactions.command.help:
+    description: Allows using /hfactions help.
+    default: true
+  hfactions.command.list:
+    description: Allows using /hfactions list.
+    default: true
+  hfactions.command.info:
+    # Вот эта строка вызывала ошибку из-за [faction_id] в flow стиле
+    description: Allows using /hfactions info [faction_id].
+    default: true
+  hfactions.command.listrecipes:
+    description: Allows viewing available custom HFactions recipes.
+    default: true
+  hfactions.adminmode.active:
+    description: Technical permission indicating admin mode is active.
+    default: false
+  hfactions.admin.adminmode:
+    description: Allows entering admin mode for any faction.
+    default: op
+  # --- Игрока ---
+  hfactions.player.leave:
+    description: Allows using /hfactions leave.
+    default: true
+  hfactions.player.chat:
+    description: Allows using /hfactions chat and talking in faction chat.
+    default: true
+
+  # --- Управление фракцией (выдаются через ранги) ---
+  hfactions.faction.invite:
+    description: Allows inviting players to the faction.
+    default: op
+  hfactions.faction.kick:
+    description: Allows kicking players from the faction.
+    default: op
+  hfactions.faction.promote:
+    description: Allows promoting players in the faction.
+    default: op
+  hfactions.faction.demote:
+    description: Allows demoting players in the faction.
+    default: op
+  hfactions.faction.setrank:
+    description: Allows setting player rank directly.
+    default: op
+  hfactions.faction.manage_ranks:
+    description: Allows changing rank display names via GUI.
+    default: op
+  hfactions.faction.manage_balance:
+    description: Grants permissions related to managing faction balance (like withdraw).
+    default: op
+  hfactions.faction.warehouse.open:
+    description: Allows opening the faction warehouse.
+    default: true
+  hfactions.faction.warehouse.deposit:
+    description: Allows depositing items into the faction warehouse.
+    default: true
+  hfactions.faction.warehouse.withdraw:
+    description: Allows withdrawing items from the faction warehouse.
+    default: false # Ограничено рангом
+  # --- Права на крафт ---
+  hfactions.craft.taser:
+    description: Allows crafting tasers (requires specific faction membership).
+    default: false
+  hfactions.craft.handcuffs:
+    description: Allows crafting handcuffs (requires specific faction membership).
+    default: false
+  hfactions.craft.protocol:
+    description: Allows crafting protocol items (requires PD membership).
+    default: false
+  # --- Штрафы ---
+  hfactions.pd.fine:
+    description: Allows PD officers to issue fines using /hf fine or protocol.
+    default: false # Ограничено рангом PD
+  # --- Административные ---
+  hfactions.admin.create:
+    description: Allows using /hfactions create.
+    default: op
+  hfactions.admin.delete:
+    description: Allows using /hfactions delete.
+    default: op
+  hfactions.admin.reload:
+    description: Allows using /hfactions reload.
+    default: op
+  hfactions.admin.territory:
+    description: Allows managing faction territories via commands.
+    default: op
+  hfactions.admin.setbalance:
+    description: Allows setting faction balance directly via command.
+    default: op
+  hfactions.admin.uncuff:
+    description: Allows using /uncuff command to remove handcuffs from any player.
+    default: op
+  hfactions.admin.givetaser:
+    description: Allows using /hf givetaser.
+    default: op
+  hfactions.admin.givehandcuffs:
+    description: Allows using /hf givehandcuffs.
+    default: op
+  hfactions.admin.giveprotocol:
+    description: Allows using /hf giveprotocol.
+    default: op
+  # --- Супер-право ---
+  hfactions.admin.*:
+    description: Grants all administrative permissions for HFactions.
+    default: op
+    children:
+      hfactions.admin.create: true
+      hfactions.admin.delete: true
+      hfactions.admin.reload: true
+      hfactions.admin.territory: true
+      hfactions.admin.setbalance: true
+      hfactions.admin.uncuff: true
+      hfactions.admin.givetaser: true
+      hfactions.admin.givehandcuffs: true
+      hfactions.admin.giveprotocol: true
+      # Можно добавить сюда и права на управление любой фракцией
+      hfactions.faction.setrank: true
+      hfactions.faction.kick: true
+      hfactions.faction.promote: true
+      hfactions.faction.demote: true
+      hfactions.faction.manage_ranks: true
+      hfactions.faction.manage_balance: true
+      hfactions.faction.warehouse.withdraw: true
+      hfactions.faction.warehouse.deposit: true

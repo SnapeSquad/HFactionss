@@ -1,0 +1,24 @@
+# territories.yml - Пример данных о территориях
+
+# Уникальное имя зоны (ключ)
+"ballas_grove":
+  factionId: "ballas" # Пример ID криминальной фракции Ballas
+  world: "world" # Укажи правильное имя мира!
+  corners:
+    - { x: 150.5, z: 300.2 }
+    - { x: 180.0, z: 310.8 }
+    - { x: 175.3, z: 340.5 }
+    - { x: 145.8, z: 330.0 }
+
+"lspd_main_station":
+  factionId: "pd"
+  world: "world"
+  corners:
+    - { x: -200.0, z: -100.0 }
+    - { x: -150.0, z: -100.0 }
+    - { x: -150.0, z: -50.0 }
+    - { x: -200.0, z: -50.0 }
+  # Можно добавить кастомный стиль
+  # style:
+  #   fill_opacity: 0.4
+  #   stroke_color: "#0000FF"
