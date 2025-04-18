@@ -1,600 +1,528 @@
 package org.isyateq.hfactions.managers;
 
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
-import org.bukkit.entity.Player;
+import org.bukkit.Bukkit; // Для планировщика
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.inventory.ItemStack;
 import org.isyateq.hfactions.HFactions;
 import org.isyateq.hfactions.models.Faction;
 import org.isyateq.hfactions.models.FactionRank;
-import org.isyateq.hfactions.models.PendingInvite;
+import org.isyateq.hfactions.models.FactionType;
+import org.isyateq.hfactions.util.Utils; // Для сериализации склада
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 
-public class PlayerManager {
+public class FactionManager {
 
     private final HFactions plugin;
-    private final DatabaseManager databaseManager; // Используем новый менеджер
-    private final FactionManager factionManager;
     private final ConfigManager configManager;
+    private final PlayerManager playerManager; // Нужен для очистки данных при удалении фракции
+    private final Map<String, Faction> factions = new ConcurrentHashMap<>();
+    private final Set<String> modifiedFactions = ConcurrentHashMap.newKeySet(); // Храним ID измененных фракций
+    private static final long AUTO_SAVE_DELAY_TICKS = 20L * 5; // 5 секунд задержки перед автосохранением после изменения
+    private volatile boolean saveTaskScheduled = false; // Флаг, что задача сохранения уже запланирована
 
-    // Данные игроков хранятся в памяти, пока они онлайн
-    private final Map<UUID, String> playerFactions = new ConcurrentHashMap<>();
-    private final Map<UUID, Integer> playerRanks = new ConcurrentHashMap<>();
-    private final Set<UUID> playersInFactionChat = ConcurrentHashMap.newKeySet();
-    private final Map<UUID, PendingInvite> pendingInvites = new ConcurrentHashMap<>();
-    private final Map<UUID, String> adminsInFactionMode = new ConcurrentHashMap<>(); // UUID админа -> ID фракции
-
-    public PlayerManager(HFactions plugin) {
+    public FactionManager(HFactions plugin) {
         this.plugin = plugin;
-        this.databaseManager = plugin.getDatabaseManager(); // Получаем DatabaseManager
-        this.factionManager = plugin.getFactionManager();
         this.configManager = plugin.getConfigManager();
-        // НЕ загружаем данные из файла здесь
+        // PlayerManager будет получен позже, когда он понадобится, чтобы избежать циклической зависимости при инициализации
+        this.playerManager = null; // Инициализируем как null
     }
 
-    // --- УДАЛИТЬ СТАРЫЕ МЕТОДЫ ЗАГРУЗКИ/СОХРАНЕНИЯ ИЗ YML ---
-    /*
-    public void loadPlayerData() { ... } // УДАЛИТЬ
-    public void savePlayerData() { ... } // УДАЛИТЬ
-    public void reloadPlayerData() { ... } // УДАЛИТЬ (или переделать на очистку кэша и перезагрузку онлайн)
-    */
-
-    // --- Методы для загрузки/сохранения данных при входе/выходе/релоаде ---
-
-    /**
-     * Загружает данные для указанного игрока (обычно при входе).
-     */
-    public void loadPlayerData(Player player) {
-        UUID uuid = player.getUniqueId();
-        plugin.getLogger().info("Loading data for player " + player.getName() + " (" + uuid + ")"); // Debug
-        databaseManager.loadPlayerDataAsync(uuid, (factionId, rankId) -> {
-            plugin.getLogger().info("Data loaded for " + player.getName() + ": faction=" + factionId + ", rank=" + rankId); // Debug
-            if (factionId != null && factionManager.getFaction(factionId) != null) {
-                playerFactions.put(uuid, factionId);
-                if (rankId != null && factionManager.getFaction(factionId).getRank(rankId) != null) {
-                    playerRanks.put(uuid, rankId);
-                } else {
-                    // Если ранг невалиден или null, сбрасываем на ранг 1
-                    playerRanks.put(uuid, 1);
-                    plugin.getLogger().warning("Player " + player.getName() + " had invalid rank ID " + rankId + " for faction " + factionId + ". Resetting to rank 1.");
-                    // Обновляем данные в БД сразу же, чтобы исправить несоответствие
-                    databaseManager.savePlayerDataAsync(uuid, factionId, 1);
-                }
-                // TODO: Применить права ранга через LuckPerms? (Если права не хранятся в LP)
-            } else {
-                // Если фракции нет или она недействительна, удаляем данные из кэша
-                playerFactions.remove(uuid);
-                playerRanks.remove(uuid);
-                if(factionId != null) { // Если фракция была указана, но не найдена, очищаем в БД
-                    databaseManager.savePlayerDataAsync(uuid, null, null);
-                    plugin.getLogger().warning("Player " + player.getName() + " was in a non-existent faction " + factionId + ". Data cleared.");
-                }
-            }
-            // Обновляем префикс/таблист, если нужно
-            updatePlayerDisplay(player);
-        });
-    }
-
-    /**
-     * Сохраняет данные для указанного игрока (обычно при выходе).
-     */
-    public void savePlayerData(Player player) {
-        savePlayerData(player.getUniqueId()); // Вызываем перегруженный метод
-    }
-
-    /**
-     * Сохраняет данные для указанного UUID (используется при выходе и в onDisable).
-     */
-    public void savePlayerData(UUID uuid) {
-        String factionId = playerFactions.get(uuid);
-        Integer rankId = playerRanks.get(uuid);
-        plugin.getLogger().info("Saving data for player " + uuid + ": faction=" + factionId + ", rank=" + rankId); // Debug
-        // Сохраняем текущее состояние (даже если factionId/rankId null, это очистит запись в БД)
-        databaseManager.savePlayerDataAsync(uuid, factionId, rankId);
-    }
-
-
-    /**
-     * Вызывается при /reload или onEnable для загрузки данных тех, кто уже онлайн.
-     */
-    public void loadDataForOnlinePlayers() {
-        plugin.getLogger().info("Loading data for " + Bukkit.getOnlinePlayers().size() + " online players...");
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            loadPlayerData(player);
+    // Ленивая инициализация PlayerManager
+    private PlayerManager getPlayerManager() {
+        // Если PlayerManager еще не был получен, получаем его сейчас
+        // Это решает проблему циклической зависимости при создании менеджеров
+        if (this.playerManager == null) {
+            // Возвращаем null или выбрасываем исключение, если plugin.getPlayerManager() недоступен?
+            // Предполагаем, что к моменту вызова методов, требующих playerManager, он уже будет доступен
+            return plugin.getPlayerManager();
         }
+        return this.playerManager;
     }
 
-    /**
-     * Вызывается в onDisable для сохранения данных тех, кто еще онлайн.
-     */
-    public void saveDataForOnlinePlayers() {
-        plugin.getLogger().info("Saving data for " + Bukkit.getOnlinePlayers().size() + " online players...");
-        // Сохраняем синхронно при выключении, чтобы гарантировать запись до остановки
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            UUID uuid = player.getUniqueId();
-            String factionId = playerFactions.get(uuid);
-            Integer rankId = playerRanks.get(uuid);
-            // Синхронное сохранение (менее предпочтительно, но безопаснее при выключении)
-            String sql = "INSERT OR REPLACE INTO player_data (uuid, faction_id, rank_id) VALUES(?, ?, ?);";
-            try (Connection conn = databaseManager.getConnection(); // Получаем соединение напрямую
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-                pstmt.setString(1, uuid.toString());
-                pstmt.setString(2, factionId); // factionId может быть null
-                if (rankId != null) pstmt.setInt(3, rankId); else pstmt.setNull(3, Types.INTEGER);
-                pstmt.executeUpdate();
-                plugin.getLogger().fine("Saved data synchronously for " + player.getName());
+    // --- Загрузка Фракций ---
+    public void loadFactions() {
+        factions.clear(); // Очищаем старые данные перед загрузкой
+        modifiedFactions.clear(); // Сбрасываем флаги модификации
 
-            } catch (SQLException e) {
-                plugin.getLogger().log(Level.SEVERE, "Could not save player data synchronously for " + uuid, e);
+        if (configManager == null) {
+            plugin.getLogger().severe("Cannot load factions: ConfigManager is null.");
+            return;
+        }
+        FileConfiguration factionsConfig = configManager.getFactionsConfig();
+        if (factionsConfig == null) {
+            plugin.getLogger().severe("Cannot load factions: factions.yml config object is null.");
+            return;
+        }
+        ConfigurationSection factionsSection = factionsConfig.getConfigurationSection("factions");
+
+        if (factionsSection == null) {
+            plugin.getLogger().warning("No 'factions' section found in factions.yml!");
+            return;
+        }
+
+        int loadedCount = 0;
+        for (String factionId : factionsSection.getKeys(false)) {
+            // Приводим ID к нижнему регистру для консистентности
+            String lowerCaseFactionId = factionId.toLowerCase();
+            ConfigurationSection data = factionsSection.getConfigurationSection(factionId);
+            if (data == null) {
+                plugin.getLogger().warning("Invalid configuration section for faction ID: " + factionId);
+                continue;
             }
 
-            // Удаляем из кэша после сохранения (не обязательно, т.к. плагин выключается)
-            // clearPlayerData(player);
+            try {
+                String name = data.getString("name", "Unnamed Faction");
+                FactionType type = FactionType.OTHER; // Значение по умолчанию
+                try {
+                    String typeStr = data.getString("type", "OTHER").toUpperCase();
+                    type = FactionType.valueOf(typeStr);
+                } catch (IllegalArgumentException e) {
+                    plugin.getLogger().warning("Invalid FactionType '" + data.getString("type") + "' for faction " + factionId + ". Using OTHER.");
+                }
+
+                String color = data.getString("color", "#FFFFFF");
+                String prefix = data.getString("prefix", "[" + lowerCaseFactionId.toUpperCase() + "]");
+                // Загружаем СОХРАНЕННЫЙ баланс, а не начальный
+                double balance = data.getDouble("balance", 0.0); // Используем поле "balance"
+                int warehouseSize = data.getInt("warehouse_size", 54);
+
+                // Загрузка рангов
+                Map<Integer, FactionRank> ranks = loadRanks(data.getConfigurationSection("ranks"), lowerCaseFactionId);
+
+                // Загрузка склада (десериализация из Base64)
+                String warehouseBase64 = data.getString("warehouse_contents_base64");
+                ItemStack[] warehouseContents = Utils.itemStackArrayFromBase64(warehouseBase64);
+
+                Faction faction = new Faction(lowerCaseFactionId, name, type, color, prefix, balance, warehouseSize, ranks, warehouseContents);
+                factions.put(lowerCaseFactionId, faction);
+                loadedCount++;
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to load faction: " + factionId, e);
+            }
         }
+        plugin.getLogger().info("Loaded " + loadedCount + " factions.");
     }
 
+    private Map<Integer, FactionRank> loadRanks(ConfigurationSection ranksSection, String factionId) {
+        Map<Integer, FactionRank> ranks = new ConcurrentHashMap<>();
+        if (ranksSection == null) {
+            plugin.getLogger().warning("No 'ranks' section found for faction: " + factionId + ". Creating default rank 1 and 11.");
+            ranks.put(1, new FactionRank(1, "Rank 1", "Rank 1", 0.0, new ArrayList<>()));
+            ranks.put(11, new FactionRank(11, "Leader", "Leader", 0.0, getDefaultLeaderPerms())); // Лидер по умолчанию
+            return ranks;
+        }
+
+        for (String rankIdStr : ranksSection.getKeys(false)) {
+            try {
+                int rankId = Integer.parseInt(rankIdStr);
+                ConfigurationSection rankData = ranksSection.getConfigurationSection(rankIdStr);
+                if (rankData == null) {
+                    plugin.getLogger().warning("Invalid rank data for rank ID " + rankIdStr + " in faction " + factionId);
+                    continue;
+                }
+
+                String defaultName = rankData.getString("defaultName", "Rank " + rankId);
+                String displayName = rankData.getString("displayName", defaultName);
+                double salary = rankData.getDouble("salary", 0.0);
+                List<String> permissions = rankData.getStringList("permissions");
+                if (permissions == null) { // getStringList возвращает пустой список, а не null, но на всякий случай
+                    permissions = new ArrayList<>();
+                }
+
+                ranks.put(rankId, new FactionRank(rankId, defaultName, displayName, salary, permissions));
+
+            } catch (NumberFormatException e) {
+                plugin.getLogger().warning("Invalid rank ID format '" + rankIdStr + "' for faction " + factionId + ". Skipping.");
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.SEVERE, "Failed to load rank " + rankIdStr + " for faction " + factionId, e);
+            }
+        }
+        // Убедимся, что ранг 1 и 11 существуют
+        if (!ranks.containsKey(1)) {
+            plugin.getLogger().warning("Rank 1 not found for faction: " + factionId + ". Creating default rank 1.");
+            ranks.put(1, new FactionRank(1, "Rank 1", "Rank 1", 0.0, new ArrayList<>()));
+        }
+        if (!ranks.containsKey(11)) {
+            plugin.getLogger().warning("Rank 11 (Leader) not found for faction: " + factionId + ". Creating default leader rank.");
+            ranks.put(11, new FactionRank(11, "Leader", "Leader", 0.0, getDefaultLeaderPerms()));
+        }
+        return ranks;
+    }
+
+
+    // --- Сохранение Фракций ---
 
     /**
-     * Очищает кэшированные данные игрока (при выходе).
+     * Сохраняет ВСЕ фракции в factions.yml. Вызывается при выключении плагина.
      */
-    public void clearPlayerData(Player player) {
-        UUID uuid = player.getUniqueId();
-        plugin.getLogger().info("Clearing cached data for player " + player.getName() + " (" + uuid + ")"); // Debug
-        playerFactions.remove(uuid);
-        playerRanks.remove(uuid);
-        playersInFactionChat.remove(uuid);
-        pendingInvites.remove(uuid);
-        // Если игрок был в админ режиме, выводим его
-        if (adminsInFactionMode.containsKey(uuid)) {
-            exitAdminMode(player, true); // Выход без сообщения
+    public void saveAllFactions() {
+        plugin.getLogger().info("Saving all factions data...");
+        if (configManager == null) {
+            plugin.getLogger().severe("Cannot save factions: ConfigManager is null.");
+            return;
         }
-        // TODO: Сбросить права LuckPerms, если они выдавались при входе?
-        // TODO: Обновить префикс/таблист? (Обычно делается плагином чата)
+        FileConfiguration factionsConfig = configManager.getFactionsConfig();
+        if (factionsConfig == null) {
+            plugin.getLogger().severe("Cannot save factions: factions.yml config object is null.");
+            return;
+        }
+        // Очищаем старую секцию factions полностью перед записью
+        factionsConfig.set("factions", null);
+        // Используем createSection чтобы гарантировать наличие секции
+        ConfigurationSection factionsSection = factionsConfig.createSection("factions");
+
+        int savedCount = 0;
+        for (Faction faction : factions.values()) {
+            if (saveFactionData(faction, factionsSection)) { // Проверяем результат сохранения
+                savedCount++;
+            }
+        }
+        configManager.saveFactionsConfig(); // Сохраняем файл factions.yml
+        modifiedFactions.clear(); // Сбрасываем флаги после полного сохранения
+        plugin.getLogger().info("Saved data for " + savedCount + " factions.");
     }
 
+    /**
+     * Сохраняет только измененные фракции. Вызывается автоматически или по команде.
+     */
+    public synchronized void saveModifiedFactions() { // Синхронизировано для управления флагом saveTaskScheduled
+        if (modifiedFactions.isEmpty()) {
+            // plugin.getLogger().fine("No modified factions to save."); // Можно раскомментировать для отладки
+            return; // Нечего сохранять
+        }
+        plugin.getLogger().info("Saving data for " + modifiedFactions.size() + " modified factions...");
 
-    // --- Методы управления фракцией игрока ---
-
-    public void joinFaction(Player player, Faction faction) {
-        UUID uuid = player.getUniqueId();
-        if (isInFaction(player)) {
-            player.sendMessage(ChatColor.RED + "You are already in a faction.");
+        if (configManager == null) {
+            plugin.getLogger().severe("Cannot save modified factions: ConfigManager is null.");
+            // Очищаем флаги, т.к. сохранить не удалось
+            modifiedFactions.clear();
+            saveTaskScheduled = false; // Сбрасываем флаг задачи
             return;
         }
-        if (faction == null) {
-            player.sendMessage(ChatColor.RED + "Invalid faction specified.");
+        FileConfiguration factionsConfig = configManager.getFactionsConfig();
+        if (factionsConfig == null) {
+            plugin.getLogger().severe("Cannot save modified factions: factions.yml config object is null.");
+            modifiedFactions.clear();
+            saveTaskScheduled = false;
             return;
         }
-
-        String factionId = faction.getId();
-        int initialRankId = 1; // Всегда начинаем с ранга 1
-
-        playerFactions.put(uuid, factionId);
-        playerRanks.put(uuid, initialRankId);
-
-        // Сохраняем в БД АСИНХРОННО
-        databaseManager.savePlayerDataAsync(uuid, factionId, initialRankId);
-
-        // Отправляем сообщение игроку и во фракцию
-        player.sendMessage(ChatColor.GREEN + "You have joined the " + faction.getName() + " faction!");
-        broadcastToFaction(factionId, ChatColor.YELLOW + player.getName() + " has joined the faction.");
-
-        // Обновляем отображение
-        updatePlayerDisplay(player);
-        // TODO: Выдать права первого ранга через LuckPerms?
-    }
-
-    public void leaveFaction(Player player) {
-        UUID uuid = player.getUniqueId();
-        String factionId = getPlayerFactionId(player);
-
-        if (factionId == null) {
-            player.sendMessage(ChatColor.RED + "You are not in a faction.");
-            return;
+        ConfigurationSection factionsSection = factionsConfig.getConfigurationSection("factions");
+        if (factionsSection == null) {
+            plugin.getLogger().warning("Creating 'factions' section in factions.yml during save.");
+            factionsSection = factionsConfig.createSection("factions");
         }
 
-        Faction faction = factionManager.getFaction(factionId);
-        String factionName = faction != null ? faction.getName() : factionId;
-
-        // Сохраняем null в БД АСИНХРОННО
-        databaseManager.savePlayerDataAsync(uuid, null, null);
-
-        // Очищаем кэш
-        playerFactions.remove(uuid);
-        playerRanks.remove(uuid);
-        playersInFactionChat.remove(uuid); // Выходим из фракц. чата
-
-        // Сообщения
-        player.sendMessage(ChatColor.GREEN + "You have left the " + factionName + " faction.");
-        if (faction != null) {
-            broadcastToFaction(factionId, ChatColor.YELLOW + player.getName() + " has left the faction.");
-        }
-
-        // Обновляем отображение
-        updatePlayerDisplay(player);
-        // TODO: Забрать фракционные права LuckPerms?
-    }
-
-    public void kickPlayer(Player kicker, Player target) {
-        UUID targetUuid = target.getUniqueId();
-        String targetFactionId = getPlayerFactionId(target);
-
-        if (targetFactionId == null) {
-            kicker.sendMessage(ChatColor.RED + target.getName() + " is not in any faction.");
-            return;
-        }
-        // Проверка, что кикающий в той же фракции (или админ в режиме)
-        String kickerFactionId = getPlayerFactionId(kicker);
-        String adminModeFaction = adminsInFactionMode.get(kicker.getUniqueId());
-        if (!targetFactionId.equals(kickerFactionId) && !targetFactionId.equals(adminModeFaction)) {
-            kicker.sendMessage(ChatColor.RED + "You can only kick members of your own faction.");
-            return;
-        }
-        // Проверка ранга (кикающий должен быть выше или иметь право) - логика в FactionCommand
-        // ...
-
-        Faction faction = factionManager.getFaction(targetFactionId);
-        String factionName = faction != null ? faction.getName() : targetFactionId;
-
-        // Сохраняем null в БД АСИНХРОННО
-        databaseManager.savePlayerDataAsync(targetUuid, null, null);
-
-        // Очищаем кэш для кикнутого
-        playerFactions.remove(targetUuid);
-        playerRanks.remove(targetUuid);
-        playersInFactionChat.remove(targetUuid);
-
-        // Сообщения
-        target.sendMessage(ChatColor.RED + "You have been kicked from the " + factionName + " faction by " + kicker.getName() + ".");
-        kicker.sendMessage(ChatColor.GREEN + "You have kicked " + target.getName() + " from the faction.");
-        if (faction != null) {
-            broadcastToFaction(targetFactionId, ChatColor.YELLOW + target.getName() + " was kicked from the faction by " + kicker.getName() + ".");
-        }
-
-        // Обновляем отображение кикнутого
-        updatePlayerDisplay(target);
-        // TODO: Забрать фракционные права LuckPerms у кикнутого?
-    }
-
-    public void promotePlayer(Player promoter, Player target) {
-        UUID targetUuid = target.getUniqueId();
-        String factionId = getPlayerFactionId(target);
-        Integer currentRankId = getPlayerRankId(target);
-
-        if (factionId == null || currentRankId == null) {
-            promoter.sendMessage(ChatColor.RED + target.getName() + " is not in a faction or has an invalid rank.");
-            return;
-        }
-        // Проверка фракции промоутера
-        String promoterFactionId = getPlayerFactionId(promoter);
-        String adminModeFaction = adminsInFactionMode.get(promoter.getUniqueId());
-        if (!factionId.equals(promoterFactionId) && !factionId.equals(adminModeFaction)) {
-            promoter.sendMessage(ChatColor.RED + "You can only promote members of your own faction.");
-            return;
-        }
-
-        Faction faction = factionManager.getFaction(factionId);
-        if (faction == null) return; // Маловероятно, но все же
-
-        // Проверка ранга промоутера (в FactionCommand) и проверка, что не повышаем лидера (ранг 11)
-        FactionRank leaderRank = faction.getLeaderRank();
-        if (leaderRank != null && currentRankId >= leaderRank.getInternalId()) {
-            promoter.sendMessage(ChatColor.RED + "You cannot promote the faction leader or someone at the highest rank.");
-            return;
-        }
-
-        int nextRankId = currentRankId + 1;
-        FactionRank nextRank = faction.getRank(nextRankId);
-        if (nextRank == null) {
-            promoter.sendMessage(ChatColor.RED + "The next rank (" + nextRankId + ") does not exist in this faction.");
-            return;
-        }
-
-        // Обновляем ранг в кэше
-        playerRanks.put(targetUuid, nextRankId);
-        // Сохраняем в БД АСИНХРОННО
-        databaseManager.savePlayerDataAsync(targetUuid, factionId, nextRankId);
-
-        // Сообщения
-        String rankName = nextRank.getDisplayName();
-        target.sendMessage(ChatColor.GREEN + "You have been promoted to " + rankName + " by " + promoter.getName() + "!");
-        promoter.sendMessage(ChatColor.GREEN + "You have promoted " + target.getName() + " to " + rankName + ".");
-        broadcastToFaction(factionId, ChatColor.YELLOW + target.getName() + " was promoted to " + rankName + " by " + promoter.getName() + ".");
-
-        // Обновляем отображение и права
-        updatePlayerDisplay(target);
-        // TODO: Обновить права LuckPerms для нового ранга?
-    }
-
-    public void demotePlayer(Player demoter, Player target) {
-        UUID targetUuid = target.getUniqueId();
-        String factionId = getPlayerFactionId(target);
-        Integer currentRankId = getPlayerRankId(target);
-
-        if (factionId == null || currentRankId == null) {
-            demoter.sendMessage(ChatColor.RED + target.getName() + " is not in a faction or has an invalid rank.");
-            return;
-        }
-        // Проверка фракции понижающего
-        String demoterFactionId = getPlayerFactionId(demoter);
-        String adminModeFaction = adminsInFactionMode.get(demoter.getUniqueId());
-        if (!factionId.equals(demoterFactionId) && !factionId.equals(adminModeFaction)) {
-            demoter.sendMessage(ChatColor.RED + "You can only demote members of your own faction.");
-            return;
-        }
-
-        Faction faction = factionManager.getFaction(factionId);
-        if (faction == null) return;
-
-        // Проверка ранга понижающего (в FactionCommand) и проверка, что не понижаем ниже ранга 1
-        if (currentRankId <= 1) {
-            demoter.sendMessage(ChatColor.RED + "You cannot demote someone who is already at the lowest rank.");
-            return;
-        }
-
-        int newRankId = currentRankId - 1;
-        FactionRank newRank = faction.getRank(newRankId); // Ранг 1 точно должен быть
-
-        // Обновляем ранг в кэше
-        playerRanks.put(targetUuid, newRankId);
-        // Сохраняем в БД АСИНХРОННО
-        databaseManager.savePlayerDataAsync(targetUuid, factionId, newRankId);
-
-        // Сообщения
-        String rankName = newRank.getDisplayName();
-        target.sendMessage(ChatColor.RED + "You have been demoted to " + rankName + " by " + demoter.getName() + ".");
-        demoter.sendMessage(ChatColor.GREEN + "You have demoted " + target.getName() + " to " + rankName + ".");
-        broadcastToFaction(factionId, ChatColor.YELLOW + target.getName() + " was demoted to " + rankName + " by " + demoter.getName() + ".");
-
-        // Обновляем отображение и права
-        updatePlayerDisplay(target);
-        // TODO: Обновить права LuckPerms для нового ранга?
-    }
-
-    public void setPlayerRank(Player setter, Player target, int rankId) {
-        UUID targetUuid = target.getUniqueId();
-        String factionId = getPlayerFactionId(target);
-        Integer currentRankId = getPlayerRankId(target); // Текущий ранг для сравнения
-
-        if (factionId == null) {
-            setter.sendMessage(ChatColor.RED + target.getName() + " is not in a faction.");
-            return;
-        }
-        // Проверка фракции установщика
-        String setterFactionId = getPlayerFactionId(setter);
-        String adminModeFaction = adminsInFactionMode.get(setter.getUniqueId());
-        if (!factionId.equals(setterFactionId) && !factionId.equals(adminModeFaction)) {
-            setter.sendMessage(ChatColor.RED + "You can only set rank for members of your own faction.");
-            return;
-        }
-
-        Faction faction = factionManager.getFaction(factionId);
-        if (faction == null) return;
-
-        FactionRank newRank = faction.getRank(rankId);
-        if (newRank == null) {
-            setter.sendMessage(ChatColor.RED + "Rank ID " + rankId + " does not exist in this faction.");
-            return;
-        }
-
-        // Проверка ранга установщика (в FactionCommand) - не должен ставить ранг выше своего (если не админ)
-        // ...
-
-        // Обновляем ранг в кэше
-        playerRanks.put(targetUuid, rankId);
-        // Сохраняем в БД АСИНХРОННО
-        databaseManager.savePlayerDataAsync(targetUuid, factionId, rankId);
-
-        // Сообщения
-        String rankName = newRank.getDisplayName();
-        target.sendMessage(ChatColor.YELLOW + "Your rank has been set to " + rankName + " by " + setter.getName() + ".");
-        setter.sendMessage(ChatColor.GREEN + "You have set " + target.getName() + "'s rank to " + rankName + ".");
-        broadcastToFaction(factionId, ChatColor.YELLOW + target.getName() + "'s rank was set to " + rankName + " by " + setter.getName() + ".");
-
-        // Обновляем отображение и права
-        updatePlayerDisplay(target);
-        // TODO: Обновить права LuckPerms для нового ранга?
-    }
+        int savedCount = 0;
+        // Создаем копию сета, чтобы избежать ConcurrentModificationException, если markFactionAsModified вызовется во время сохранения
+        Set<String> factionsToSave = new HashSet<>(modifiedFactions);
+        // Очищаем оригинальный сет ДО начала сохранения, чтобы новые изменения попали в следующую итерацию
+        modifiedFactions.clear();
 
 
-    // --- Геттеры и проверки ---
-
-    public boolean isInFaction(Player player) {
-        return playerFactions.containsKey(player.getUniqueId());
-    }
-
-    public String getPlayerFactionId(Player player) {
-        return playerFactions.get(player.getUniqueId());
-    }
-
-    public String getPlayerFactionId(UUID uuid) {
-        return playerFactions.get(uuid);
-    }
-
-
-    public Faction getPlayerFaction(Player player) {
-        String factionId = getPlayerFactionId(player);
-        return factionId != null ? factionManager.getFaction(factionId) : null;
-    }
-
-    public Integer getPlayerRankId(Player player) {
-        return playerRanks.get(player.getUniqueId());
-    }
-
-    public FactionRank getPlayerRank(Player player) {
-        String factionId = getPlayerFactionId(player);
-        Integer rankId = getPlayerRankId(player);
-        if (factionId != null && rankId != null) {
-            Faction faction = factionManager.getFaction(factionId);
+        for (String factionId : factionsToSave) {
+            Faction faction = factions.get(factionId); // ID уже в lowercase
             if (faction != null) {
-                return faction.getRank(rankId);
-            }
-        }
-        return null;
-    }
-
-    public List<Player> getOnlineFactionMembers(String factionId) {
-        List<Player> members = new ArrayList<>();
-        if (factionId == null) return members;
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (factionId.equals(getPlayerFactionId(player))) {
-                members.add(player);
-            }
-        }
-        return members;
-    }
-
-    // --- Фракционный чат ---
-
-    public boolean isInFactionChat(Player player) {
-        return playersInFactionChat.contains(player.getUniqueId());
-    }
-
-    public void toggleFactionChat(Player player) {
-        UUID uuid = player.getUniqueId();
-        if (!isInFaction(player)) {
-            player.sendMessage(ChatColor.RED + "You must be in a faction to use faction chat.");
-            return;
-        }
-        if (playersInFactionChat.contains(uuid)) {
-            playersInFactionChat.remove(uuid);
-            player.sendMessage(ChatColor.YELLOW + "Faction chat disabled.");
-        } else {
-            playersInFactionChat.add(uuid);
-            player.sendMessage(ChatColor.GREEN + "Faction chat enabled.");
-        }
-    }
-
-    public void broadcastToFaction(String factionId, String message) {
-        if (factionId == null || message == null) return;
-        List<Player> members = getOnlineFactionMembers(factionId);
-        plugin.getLogger().fine("Broadcasting to faction " + factionId + " (" + members.size() + " members): " + message);
-        for (Player member : members) {
-            member.sendMessage(message);
-        }
-        // Можно также логировать сообщение в консоль или файл
-    }
-
-    // --- Приглашения ---
-
-    public void addInvite(Player target, PendingInvite invite) {
-        removeInvite(target); // Удаляем старое приглашение, если есть
-        pendingInvites.put(target.getUniqueId(), invite);
-        // Запускаем таймер удаления приглашения
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            PendingInvite currentInvite = pendingInvites.get(target.getUniqueId());
-            // Удаляем только если это ТО ЖЕ САМОЕ приглашение (на случай если его приняли/отклонили и пришло новое)
-            if (currentInvite != null && currentInvite.getInviterUUID().equals(invite.getInviterUUID()) && currentInvite.getFactionId().equals(invite.getFactionId())) {
-                pendingInvites.remove(target.getUniqueId());
-                target.sendMessage(ChatColor.RED + "The faction invite from " + invite.getInviterName() + " has expired.");
-                // Закрыть GUI если открыто?
-                if(target.getOpenInventory().getTitle().contains("Faction Invite")) { // Простая проверка
-                    target.closeInventory();
+                if (saveFactionData(faction, factionsSection)) {
+                    savedCount++;
+                } else {
+                    // Если сохранение не удалось, возвращаем ID в сет измененных? Спорно. Пока просто логируем.
+                    plugin.getLogger().severe("Failed to save data for faction " + factionId + " during modified save.");
+                }
+            } else {
+                plugin.getLogger().warning("Faction " + factionId + " marked as modified but not found in memory. Removing from config if exists.");
+                // Удаляем секцию из конфига, если фракции больше нет в памяти
+                if (factionsSection.contains(factionId)) {
+                    factionsSection.set(factionId, null);
+                    plugin.getLogger().info("Removed config section for non-existent faction: " + factionId);
                 }
             }
-        }, configManager.getConfig().getLong("faction.invite_expire_seconds", 60) * 20L); // 60 секунд по умолчанию
+        }
+
+        if (savedCount > 0 || !factionsToSave.isEmpty()) { // Сохраняем файл, даже если удалили секции несуществующих фракций
+            configManager.saveFactionsConfig(); // Сохраняем файл
+            plugin.getLogger().info("Attempted to save data for " + factionsToSave.size() + " factions, successfully saved " + savedCount + ".");
+        }
+        // Сбрасываем флаг планировщика ПОСЛЕ завершения сохранения
+        saveTaskScheduled = false;
     }
 
-    public PendingInvite getInvite(Player target) {
-        return pendingInvites.get(target.getUniqueId());
+
+    // Вспомогательный метод для сохранения данных одной фракции
+    // Возвращает true при успехе, false при ошибке
+    private boolean saveFactionData(Faction faction, ConfigurationSection factionsSection) {
+        if (faction == null || factionsSection == null) {
+            return false;
+        }
+        try {
+            // Используем ID фракции как ключ секции
+            ConfigurationSection data = factionsSection.createSection(faction.getId());
+
+            data.set("name", faction.getName());
+            data.set("type", faction.getType().name());
+            data.set("color", faction.getColor());
+            data.set("prefix", faction.getPrefix());
+            // Сохраняем ТЕКУЩИЙ баланс
+            data.set("balance", faction.getBalance());
+            data.set("warehouse_size", faction.getWarehouseSize());
+
+            // Сохранение рангов (включая измененные displayName)
+            ConfigurationSection ranksSection = data.createSection("ranks");
+            if (faction.getRanks() != null) { // Проверка на null
+                for (Map.Entry<Integer, FactionRank> entry : faction.getRanks().entrySet()) {
+                    if (entry == null || entry.getValue() == null) continue; // Пропускаем невалидные записи
+                    FactionRank rank = entry.getValue();
+                    ConfigurationSection rankData = ranksSection.createSection(String.valueOf(entry.getKey()));
+
+                    rankData.set("defaultName", rank.getDefaultName());
+                    // Сохраняем displayName только если он отличается от defaultName
+                    if (rank.getDisplayName() != null && !rank.getDisplayName().equals(rank.getDefaultName())) {
+                        rankData.set("displayName", rank.getDisplayName());
+                    } else {
+                        // Убедимся, что поле удалено, если имя сброшено к дефолту или null
+                        rankData.set("displayName", null);
+                    }
+                    rankData.set("salary", rank.getSalary());
+                    rankData.set("permissions", rank.getPermissions()); // Сохраняем список прав
+                }
+            }
+
+            // Сохранение склада (сериализация в Base64)
+            ItemStack[] warehouseContents = faction.getWarehouseContents();
+            if (warehouseContents != null) { // Проверка на null перед сериализацией
+                String warehouseBase64 = Utils.itemStackArrayToBase64(warehouseContents);
+                // Сохраняем строку, даже если она null (означает ошибку сериализации или пустой склад)
+                data.set("warehouse_contents_base64", warehouseBase64);
+            } else {
+                data.set("warehouse_contents_base64", null); // Явно ставим null, если массив склада null
+            }
+            return true; // Успешно подготовили данные
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.SEVERE, "Error preparing data for faction " + faction.getId(), e);
+            return false; // Ошибка при подготовке данных
+        }
     }
 
-    public void removeInvite(Player target) {
-        pendingInvites.remove(target.getUniqueId());
-    }
 
-    // --- Админский режим ---
+    // --- Управление фракциями ---
 
-    public boolean isAdminInMode(Player admin) {
-        return adminsInFactionMode.containsKey(admin.getUniqueId());
-    }
-
-    public String getAdminModeFactionId(Player admin) {
-        return adminsInFactionMode.get(admin.getUniqueId());
-    }
-
-    public void enterAdminMode(Player admin, Faction faction) {
-        UUID adminUuid = admin.getUniqueId();
-        if (isAdminInMode(admin)) {
-            admin.sendMessage(ChatColor.RED + "You are already in admin mode for faction " + adminsInFactionMode.get(adminUuid) + ".");
+    public void createFaction(String id, String name, FactionType type, String color, String prefix, double balance, int warehouseSize) {
+        if (id == null || name == null || type == null || color == null || prefix == null) {
+            plugin.getLogger().severe("Cannot create faction: One or more arguments are null.");
+            return;
+        }
+        String lowerCaseId = id.toLowerCase();
+        if (factions.containsKey(lowerCaseId)) {
+            plugin.getLogger().warning("Faction with ID " + lowerCaseId + " already exists.");
             return;
         }
 
-        if (!admin.hasPermission("hfactions.admin.adminmode")) {
-            admin.sendMessage(ChatColor.RED + "You do not have permission to enter admin mode.");
-            return;
-        }
+        // Создаем фракцию
+        Faction faction = new Faction(lowerCaseId, name, type, color, prefix, balance, warehouseSize);
 
-        if (faction == null) {
-            admin.sendMessage(ChatColor.RED + "Invalid faction specified.");
-            return;
-        }
+        // Добавляем обязательные ранги
+        faction.addRank(new FactionRank(1, "Recruit", "Recruit", 0.0, new ArrayList<>()));
+        faction.addRank(new FactionRank(11, "Leader", "Leader", 1000.0, getDefaultLeaderPerms()));
 
-        // Выдаем права лидера через LuckPerms
-        boolean success = plugin.getLuckPermsIntegration().setAdminMode(admin, true);
-        if (!success) {
-            admin.sendMessage(ChatColor.RED + "Failed to apply admin permissions via LuckPerms.");
-            return;
-        }
-
-        adminsInFactionMode.put(adminUuid, faction.getId());
-        admin.sendMessage(ChatColor.GREEN + "You have entered admin mode for faction: " + faction.getName());
-        admin.sendMessage(ChatColor.YELLOW + "You now have leader permissions for this faction's commands.");
-        // TODO: Добавить PAPI хук или обновить префикс/таб
-        updatePlayerDisplay(admin); // Обновить отображение
+        factions.put(lowerCaseId, faction);
+        markFactionAsModified(lowerCaseId); // Отмечаем для сохранения
+        // Не вызываем saveModifiedFactions() сразу, даем сработать автосохранению или команде
+        plugin.getLogger().info("Faction " + name + " (ID: " + lowerCaseId + ") created.");
     }
 
-    public void exitAdminMode(Player admin, boolean silent) {
-        UUID adminUuid = admin.getUniqueId();
-        if (!isAdminInMode(admin)) {
-            if (!silent) admin.sendMessage(ChatColor.RED + "You are not in admin mode.");
-            return;
+    public boolean deleteFaction(String id) {
+        if (id == null) return false;
+        String lowerCaseId = id.toLowerCase();
+        Faction faction = factions.remove(lowerCaseId); // Удаляем из памяти
+
+        if (faction != null) {
+            plugin.getLogger().info("Deleting faction " + faction.getName() + " (ID: " + lowerCaseId + ")");
+            // Очищаем данные игроков этой фракции (если PlayerManager доступен)
+            PlayerManager pm = getPlayerManager();
+            if (pm != null) {
+                pm.clearFactionDataFor(lowerCaseId);
+            } else {
+                plugin.getLogger().warning("PlayerManager not available, cannot clear player data for deleted faction " + lowerCaseId);
+            }
+
+            // Удаляем данные из factions.yml
+            boolean removedFromConfig = false;
+            if (configManager != null) {
+                FileConfiguration factionsConfig = configManager.getFactionsConfig();
+                if (factionsConfig != null && factionsConfig.contains("factions." + lowerCaseId)) {
+                    factionsConfig.set("factions." + lowerCaseId, null); // Удаляем секцию
+                    configManager.saveFactionsConfig(); // Сохраняем файл сразу после удаления
+                    removedFromConfig = true;
+                    plugin.getLogger().info("Removed faction " + lowerCaseId + " from factions.yml.");
+                }
+            } else {
+                plugin.getLogger().severe("Cannot remove faction from config: ConfigManager is null.");
+            }
+
+            modifiedFactions.remove(lowerCaseId); // Убираем из измененных, если был там
+            return true; // Успешно удалили из памяти (и, возможно, из конфига)
+        } else {
+            plugin.getLogger().warning("Faction with ID " + lowerCaseId + " not found for deletion.");
+            return false;
         }
+    }
 
-        String factionId = adminsInFactionMode.get(adminUuid);
+    // --- Доступ к данным ---
 
-        // Забираем права через LuckPerms
-        boolean success = plugin.getLuckPermsIntegration().setAdminMode(admin, false);
-        if (!success && !silent) { // Сообщаем об ошибке только если не тихий выход (например, при выходе игрока)
-            admin.sendMessage(ChatColor.RED + "Failed to remove admin permissions via LuckPerms.");
-            // Не выходим из режима, если не удалось снять права? Или выходим? Решаем... пока выходим
+    public Faction getFaction(String id) {
+        return id != null ? factions.get(id.toLowerCase()) : null;
+    }
+
+    public Map<String, Faction> getAllFactions() {
+        return Collections.unmodifiableMap(factions); // Возвращаем неизменяемую копию
+    }
+
+    public void reloadFactions() {
+        plugin.getLogger().info("Reloading factions from factions.yml...");
+        // Важно: При перезагрузке несохраненные изменения в памяти будут потеряны.
+        // Это ожидаемое поведение для команды reload.
+        // Если нужно сохранять перед reload, это должна быть отдельная команда/логика.
+        loadFactions();
+        // Проверка онлайн игроков не требуется, т.к. их данные загружаются при входе/выходе
+        // или уже были загружены. Если фракция удалилась, они получат null при запросе.
+        plugin.getLogger().info("Factions reloaded.");
+    }
+
+    /**
+     * Помечает фракцию как измененную и планирует отложенное сохранение.
+     */
+    public void markFactionAsModified(String factionId) {
+        if (factionId == null) return;
+        String lowerCaseId = factionId.toLowerCase();
+        if (factions.containsKey(lowerCaseId)) { // Проверяем, что такая фракция еще существует
+            boolean added = modifiedFactions.add(lowerCaseId);
+            if (added) { // Планируем сохранение только если ID был добавлен (т.е. еще не был помечен)
+                plugin.getLogger().fine("Faction " + lowerCaseId + " marked as modified.");
+                scheduleSaveTask(); // Планируем отложенное сохранение
+            }
+        } else {
+            plugin.getLogger().warning("Attempted to mark non-existent faction " + lowerCaseId + " as modified.");
         }
+    }
 
-        adminsInFactionMode.remove(adminUuid);
-        if (!silent) admin.sendMessage(ChatColor.GREEN + "You have exited admin mode for faction: " + factionId);
-        // TODO: Обновить PAPI хук или префикс/таб
-        updatePlayerDisplay(admin); // Обновить отображение
+    /**
+     * Планирует однократное отложенное сохранение измененных фракций.
+     */
+    private synchronized void scheduleSaveTask() { // Синхронизировано для флага
+        // Планируем задачу, только если она еще не запланирована
+        if (!saveTaskScheduled) {
+            saveTaskScheduled = true;
+            plugin.getLogger().fine("Scheduling auto-save for modified factions in " + AUTO_SAVE_DELAY_TICKS + " ticks.");
+            Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+                try {
+                    saveModifiedFactions(); // Вызов синхронизированного метода сохранения
+                } catch (Exception e) {
+                    plugin.getLogger().log(Level.SEVERE, "Error during scheduled faction save task!", e);
+                    // Сбрасываем флаг в случае ошибки, чтобы можно было попробовать снова
+                    saveTaskScheduled = false;
+                }
+            }, AUTO_SAVE_DELAY_TICKS);
+        }
+    }
+
+    // --- Управление рангами (сохранение имени) ---
+
+    public void updateRankDisplayName(String factionId, int rankId, String newDisplayName) {
+        if (factionId == null || newDisplayName == null) return;
+        Faction faction = getFaction(factionId); // ID уже будет в lowercase
+        if (faction != null) {
+            FactionRank rank = faction.getRank(rankId);
+            if (rank != null) {
+                // Устанавливаем имя только если оно реально изменилось
+                if (!newDisplayName.equals(rank.getDisplayName())) {
+                    rank.setDisplayName(newDisplayName);
+                    faction.updateRank(rank); // Помечает фракцию как измененную внутри
+                }
+            } else {
+                plugin.getLogger().warning("Cannot update display name: Rank " + rankId + " not found in faction " + factionId);
+            }
+        } else {
+            plugin.getLogger().warning("Cannot update display name: Faction " + factionId + " not found.");
+        }
+    }
+
+    public void resetRankDisplayName(String factionId, int rankId) {
+        if (factionId == null) return;
+        Faction faction = getFaction(factionId);
+        if (faction != null) {
+            FactionRank rank = faction.getRank(rankId);
+            if (rank != null) {
+                // Сбрасываем, только если имя отличается от дефолтного
+                if (rank.getDisplayName() != null && !rank.getDisplayName().equals(rank.getDefaultName())) {
+                    rank.resetDisplayName();
+                    faction.updateRank(rank); // Помечает фракцию как измененную внутри
+                }
+            } else {
+                plugin.getLogger().warning("Cannot reset display name: Rank " + rankId + " not found in faction " + factionId);
+            }
+        } else {
+            plugin.getLogger().warning("Cannot reset display name: Faction " + factionId + " not found.");
+        }
+    }
+
+    // --- Управление балансом ---
+    public void setFactionBalance(String factionId, double amount) {
+        if (factionId == null) return;
+        Faction faction = getFaction(factionId);
+        if (faction != null) {
+            double sanitizedAmount = Math.max(0, amount); // Баланс не может быть отрицательным
+            if (faction.getBalance() != sanitizedAmount) { // Изменяем и помечаем только если значение отличается
+                faction.setBalance(sanitizedAmount);
+                markFactionAsModified(faction.getId());
+            }
+        } else {
+            plugin.getLogger().warning("Cannot set balance: Faction " + factionId + " not found.");
+        }
+    }
+
+    public boolean depositToFaction(String factionId, double amount) {
+        if (factionId == null || amount <= 0) return false;
+        Faction faction = getFaction(factionId);
+        if (faction != null) {
+            faction.deposit(amount);
+            markFactionAsModified(faction.getId());
+            return true;
+        }
+        plugin.getLogger().warning("Cannot deposit to faction: Faction " + factionId + " not found.");
+        return false;
+    }
+
+    public boolean withdrawFromFaction(String factionId, double amount) {
+        if (factionId == null || amount <= 0) return false;
+        Faction faction = getFaction(factionId);
+        if (faction != null) {
+            boolean success = faction.withdraw(amount);
+            if(success) {
+                markFactionAsModified(faction.getId());
+            }
+            return success;
+        }
+        plugin.getLogger().warning("Cannot withdraw from faction: Faction " + factionId + " not found.");
+        return false;
     }
 
     // --- Вспомогательные методы ---
 
-    /**
-     * Обновляет отображаемое имя игрока (например, для префикса в табе или чате).
-     * Требует интеграции с плагином чата/таба или PlaceholderAPI.
-     */
-    private void updatePlayerDisplay(Player player) {
-        // Это ЗАГЛУШКА. Реальная логика зависит от используемого плагина чата/таба.
-        // Пример с PlaceholderAPI (если вы создадите Expansion):
-        // PlaceholderAPI.refreshPlaceholders(player);
-
-        // Пример прямого изменения ника (простой, но не всегда желательный):
-        /*
-        Faction faction = getPlayerFaction(player);
-        String prefix = "";
-        if (isAdminInMode(player)) {
-            prefix = ChatColor.GOLD + "[A:" + getAdminModeFactionId(player) + "] ";
-        } else if (faction != null) {
-            prefix = ChatColor.translateAlternateColorCodes('&', faction.getPrefix()) + " ";
-        }
-        // ОСТОРОЖНО: setDisplayName влияет на чат, setPlayerListName - на таб.
-        // Это может конфликтовать с другими плагинами.
-        // player.setDisplayName(prefix + player.getName() + ChatColor.RESET);
-        // player.setPlayerListName(prefix + player.getName()); // Может быть обрезан
-        */
-        plugin.getLogger().fine("Placeholder: updatePlayerDisplay called for " + player.getName());
+    private List<String> getDefaultLeaderPerms() {
+        // Возвращает стандартный набор прав для лидера
+        return Arrays.asList(
+                "hfactions.faction.invite", "hfactions.faction.kick", "hfactions.faction.promote",
+                "hfactions.faction.demote", "hfactions.faction.setrank", "hfactions.faction.manage_ranks",
+                "hfactions.faction.balance.view", "hfactions.faction.deposit", "hfactions.faction.withdraw",
+                "hfactions.faction.manage_balance", "hfactions.faction.warehouse.open",
+                "hfactions.faction.warehouse.deposit", "hfactions.faction.warehouse.withdraw"
+                // Можно добавить права на управление территориями своей фракции
+                ,"hfactions.territory.manage.own"
+        );
     }
-
 }

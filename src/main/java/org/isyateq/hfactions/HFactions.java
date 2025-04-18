@@ -46,6 +46,7 @@ public final class HFactions extends JavaPlugin {
     private LuckPermsIntegration luckPermsIntegration;
     private DynmapIntegration dynmapIntegration; // Главный класс для Dynmap
     private OraxenIntegration oraxenIntegration;
+    private HFactions plugin;
 
     @Override
     public void onEnable() {

@@ -16,8 +16,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta; // Добавлен импорт
 import org.isyateq.hfactions.*;
 import org.isyateq.hfactions.managers.*;
-import org.isyateq.hfactions.managers.CraftingManager.CustomCraftingRecipe;
-import org.isyateq.hfactions.managers.DynmapManager.TerritoryData;
+import org.isyateq.hfactions.managers.CraftingManager;
+import org.isyateq.hfactions.managers.DynmapManager;
 import org.isyateq.hfactions.models.Faction;
 import org.isyateq.hfactions.models.FactionRank;
 import org.isyateq.hfactions.models.FactionType;

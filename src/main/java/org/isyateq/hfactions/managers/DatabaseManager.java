@@ -30,7 +30,7 @@ public class DatabaseManager {
 
     // --- Управление соединением ---
 
-    private Connection getConnection() throws SQLException {
+    Connection getConnection() throws SQLException {
         if (connection == null || connection.isClosed()) {
             try {
                 // Загружаем драйвер (на всякий случай, хотя обычно не требуется для новых JDBC)
