@@ -1,568 +1,1765 @@
 package org.isyateq.hfactions.commands;
 
-import net.milkbowl.vault.economy.Economy;
-import net.milkbowl.vault.economy.EconomyResponse;
+// Bukkit Imports
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta; // Добавлен импорт
-import org.isyateq.hfactions.*;
-import org.isyateq.hfactions.managers.*;
-import org.isyateq.hfactions.managers.CraftingManager;
-import org.isyateq.hfactions.managers.DynmapManager;
-import org.isyateq.hfactions.models.Faction;
-import org.isyateq.hfactions.models.FactionRank;
-import org.isyateq.hfactions.models.FactionType;
-import org.isyateq.hfactions.util.Utils;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
-import java.text.DecimalFormat;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit; // Добавлен импорт
+// HFactions Imports
+import org.bukkit.inventory.ItemStack;
+import org.isyateq.hfactions.HFactions;
+import org.isyateq.hfactions.managers.*;
+import org.isyateq.hfactions.models.*;
+import org.isyateq.hfactions.integrations.*; // Импортируем все интеграции
+import org.isyateq.hfactions.models.PendingInvite;
+import org.isyateq.hfactions.util.Utils; // Для color
+
+// Java Imports
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 public class FactionCommand implements CommandExecutor, TabCompleter {
 
     private final HFactions plugin;
+    // --- Менеджеры и Интеграции ---
     private final ConfigManager configManager;
     private final FactionManager factionManager;
     private final PlayerManager playerManager;
     private final ItemManager itemManager;
-    private final CuffManager cuffManager;
-    private final GuiManager guiManager;
-    private final CraftingManager craftingManager;
-    private final DynmapManager dynmapManager;
-    private final Economy economy;
+    private final GuiManager guiManager; // Нужен для /hf manageranks
+    private final CuffManager cuffManager; // Нужен для /hf uncuff
+    private final VaultIntegration vaultIntegration; // Для экономики
+    private final DynmapManager dynmapManager; // Для территорий (может быть null)
+    // Oraxen и LuckPerms обычно не нужны прямо в командах, доступ через Player/ItemManager
 
-    private final DecimalFormat moneyFormat = new DecimalFormat("#,##0.00");
-
-    // Структуры для штрафа
-    private static class PendingFine {
-        final UUID officerUuid; final UUID targetUuid; String state = "amount"; double amount = 0.0;
-        PendingFine(UUID officer, UUID target) { this.officerUuid = officer; this.targetUuid = target; }
-    }
-    private final Map<UUID, PendingFine> playersIssuingFine = new ConcurrentHashMap<>();
-    private final Map<UUID, Instant> fineGlobalCooldowns = new HashMap<>();
-    private final Map<UUID, Map<UUID, Instant>> fineTargetCooldowns = new HashMap<>();
-
-    // Углы территории
-    private final Map<UUID, List<Location>> territoryCorners = new HashMap<>();
+    // Список основных подкоманд для автодополнения и справки
+    private final List<String> baseSubCommands = Collections.unmodifiableList(Arrays.asList(
+            "help", "list", "info", "listrecipes", "leave", "chat", "c", "fc", "fchat",
+            "invite", "kick", "promote", "demote", "setrank", "manageranks",
+            "balance", "bal", "deposit", "dep", "withdraw", "wd", "warehouse", "wh",
+            "fine",
+            "territory",
+            "create", "delete", "reload", "setbalance", "uncuff", "adminmode",
+            "givetaser", "givehandcuffs", "giveprotocol"
+    ));
 
     public FactionCommand(HFactions plugin) {
         this.plugin = plugin;
+        // --- Получаем все необходимые менеджеры и интеграции ---
         this.configManager = plugin.getConfigManager();
         this.factionManager = plugin.getFactionManager();
         this.playerManager = plugin.getPlayerManager();
         this.itemManager = plugin.getItemManager();
-        this.cuffManager = plugin.getCuffManager();
         this.guiManager = plugin.getGuiManager();
-        this.craftingManager = plugin.getCraftingManager();
-        this.dynmapManager = plugin.getDynmapManager();
-        this.economy = HFactions.getEconomy();
+        this.cuffManager = plugin.getCuffManager();
+        this.vaultIntegration = plugin.getVaultIntegration();
+
+        // Получаем DynmapManager через DynmapIntegration, проверяя на null
+        DynmapIntegration dynmapIntegrationInstance = plugin.getDynmapIntegration();
+        this.dynmapManager = (dynmapIntegrationInstance != null) ? dynmapIntegrationInstance.getDynmapManager() : null;
+
+        // Проверяем критические зависимости
+        if (this.configManager == null) plugin.getLogger().severe("ConfigManager is null in FactionCommand!");
+        if (this.factionManager == null) plugin.getLogger().severe("FactionManager is null in FactionCommand!");
+        if (this.playerManager == null) plugin.getLogger().severe("PlayerManager is null in FactionCommand!");
+        if (this.itemManager == null) plugin.getLogger().severe("ItemManager is null in FactionCommand!");
+        if (this.guiManager == null) plugin.getLogger().severe("GuiManager is null in FactionCommand!");
+        if (this.cuffManager == null) plugin.getLogger().severe("CuffManager is null in FactionCommand!");
+        if (this.vaultIntegration == null) plugin.getLogger().warning("VaultIntegration is null in FactionCommand! Economy commands will fail.");
+        if (this.dynmapManager == null) plugin.getLogger().info("DynmapManager is null in FactionCommand. Territory commands will be disabled.");
+
     }
 
     @Override
-    public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
-        plugin.logInfo("[DEBUG] FactionCommand.onCommand by " + sender.getName() + " label '" + label + "' args: " + String.join(" ", args));
-
-        String subCommand = args.length > 0 ? args[0].toLowerCase() : "";
-        final String commandLabel = command.getLabel().toLowerCase();
-
-        // Обработка алиасов
-        if (configManager.isFactionChatEnabled() && configManager.getFactionChatAliases().contains(commandLabel)) { plugin.logInfo("[DEBUG] Executing as chat alias '" + commandLabel + "'"); return toggleFactionChatCommand(sender); }
-        if (configManager.isFiningEnabled() && configManager.getFineCommandAliases().contains(commandLabel)) { plugin.logInfo("[DEBUG] Executing as fine alias '" + commandLabel + "'"); String[] newArgs = new String[args.length + 1]; newArgs[0] = "fine"; System.arraycopy(args, 0, newArgs, 1, args.length); args = newArgs; subCommand = "fine"; }
-
-        final String[] finalArgs = args;
-
-        if (finalArgs.length == 0) { plugin.logInfo("[DEBUG] No subcommand by " + sender.getName()); if (sender instanceof Player) return showFactionInfo(sender, null); else return showHelp(sender); }
-
-        if (subCommand.equals("territory")) { plugin.logInfo("[DEBUG] Executing 'territory' main command for " + sender.getName()); if (finalArgs.length == 1) return usage(sender, commandLabel + " territory <subcommand> [args]"); final String territorySubCommand = finalArgs[1].toLowerCase(); final String[] territoryArgs = Arrays.copyOfRange(finalArgs, 2, finalArgs.length); return handleTerritoryCommand(sender, territorySubCommand, territoryArgs); }
-
-        if (!(sender instanceof Player) && needsPlayer(subCommand)) { plugin.logInfo("[DEBUG] Command '" + subCommand + "' needs player."); return requiresPlayer(sender); }
-        if (economy == null && needsEconomy(subCommand)) { plugin.logInfo("[DEBUG] Command '" + subCommand + "' needs economy."); Utils.msg(sender, configManager.getLangMessage("economy-disabled", "&cЭкономическая система неактивна.")); return true; } // Исправлено
-
-        plugin.logInfo("[DEBUG] Processing subcommand '" + subCommand + "' for " + sender.getName());
-        switch (subCommand) {
-            case "help": return checkPermissionAndExecute(sender, "hfactions.command.help", () -> showHelp(sender));
-            case "list": return checkPermissionAndExecute(sender, "hfactions.command.list", () -> listFactions(sender));
-            case "info": final String targetFactionIdInfo = (finalArgs.length > 1) ? finalArgs[1] : null; return checkPermissionAndExecute(sender, "hfactions.command.info", () -> showFactionInfo(sender, targetFactionIdInfo));
-            case "listrecipes": return checkPermissionAndExecute(sender, "hfactions.command.listrecipes", () -> listCustomRecipes(sender));
-            case "leave": return checkPermissionAndExecute(sender, "hfactions.player.leave", () -> leaveFaction(sender));
-            case "invite": if (finalArgs.length < 2) return usage(sender, commandLabel + " invite <ник>"); final String targetInvite = finalArgs[1]; return invitePlayer(sender, targetInvite);
-            case "kick": if (finalArgs.length < 2) return usage(sender, commandLabel + " kick <ник>"); final String targetKick = finalArgs[1]; return kickPlayer(sender, targetKick);
-            case "promote": if (finalArgs.length < 2) return usage(sender, commandLabel + " promote <ник>"); final String targetPromote = finalArgs[1]; return promotePlayer(sender, targetPromote);
-            case "demote": if (finalArgs.length < 2) return usage(sender, commandLabel + " demote <ник>"); final String targetDemote = finalArgs[1]; return demotePlayer(sender, targetDemote);
-            case "setrank": if (finalArgs.length < 3) return usage(sender, commandLabel + " setrank <ник> <id>"); final String targetSetRank = finalArgs[1]; final String rankIdStrSetRank = finalArgs[2]; return setPlayerRankCommand(sender, targetSetRank, rankIdStrSetRank);
-            case "manageranks": return manageRanksGui(sender);
-            case "balance": case "bal": return viewBalance(sender);
-            case "deposit": case "dep": if (finalArgs.length < 2) return usage(sender, commandLabel + " deposit <сумма>"); final String amountStrDep = finalArgs[1]; return depositMoney(sender, amountStrDep);
-            case "withdraw": case "wd": if (finalArgs.length < 2) return usage(sender, commandLabel + " withdraw <сумма>"); final String amountStrWd = finalArgs[1]; return withdrawMoney(sender, amountStrWd);
-            case "chat": case "c": return toggleFactionChatCommand(sender);
-            case "warehouse": case "wh": return openWarehouse(sender);
-            case "fine": if (!configManager.isFiningEnabled()) { Utils.msg(sender, configManager.getLangMessage("fine-disabled", "&cСистема штрафов отключена.")); return true; } if (finalArgs.length < 4) return usage(sender, commandLabel + " fine <ник> <сумма> <причина>"); final String targetFine = finalArgs[1]; final String amountStrFine = finalArgs[2]; final String reasonFine = String.join(" ", Arrays.copyOfRange(finalArgs, 3, finalArgs.length)); return issueFine(sender, targetFine, amountStrFine, reasonFine);
-            case "uncuff": if (finalArgs.length < 2) return usage(sender, commandLabel + " uncuff <ник>"); final String targetUncuff = finalArgs[1]; return checkPermissionAndExecute(sender, "hfactions.admin.uncuff", () -> uncuffCommand(sender, targetUncuff));
-            case "create": if (finalArgs.length < 4) return usage(sender, commandLabel + " create <id> \"<Назв>\" <тип>"); final String nameCreate = parseQuotedString(finalArgs, 2); final int nameEndIdxCreate = findQuotedStringEndIndex(finalArgs, 2); if (nameCreate == null || nameEndIdxCreate == -1 || finalArgs.length <= nameEndIdxCreate) return usage(sender, commandLabel + " create <id> \"<Назв>\" <тип> (Название!)"); final String typeStrCreate = finalArgs[nameEndIdxCreate]; final String idCreate = finalArgs[1]; return checkPermissionAndExecute(sender, "hfactions.admin.create", () -> createFaction(sender, idCreate, nameCreate, typeStrCreate));
-            case "delete": if (finalArgs.length < 2) return usage(sender, commandLabel + " delete <id>"); final String deleteId = finalArgs[1]; return checkPermissionAndExecute(sender, "hfactions.admin.delete", () -> deleteFaction(sender, deleteId));
-            case "reload": return checkPermissionAndExecute(sender, "hfactions.admin.reload", () -> reloadPlugin(sender));
-            case "setbalance": if (finalArgs.length < 3) return usage(sender, commandLabel + " setbalance <id> <сумма>"); final String sbFactionId = finalArgs[1]; final String sbAmountStr = finalArgs[2]; return checkPermissionAndExecute(sender, "hfactions.admin.setbalance", () -> setBalanceAdmin(sender, sbFactionId, sbAmountStr));
-            case "adminmode": final String targetFactionIdAdminMode = (finalArgs.length > 1) ? finalArgs[1] : null; return checkPermissionAndExecute(sender, "hfactions.admin.adminmode", () -> toggleAdminMode(sender, targetFactionIdAdminMode));
-            case "givetaser": final String targetGiveTaser = (finalArgs.length > 1) ? finalArgs[1] : null; return giveItem(sender, "hfactions.admin.givetaser", itemManager::getTaserItem, "Тайзер", targetGiveTaser);
-            case "givehandcuffs": final String targetGiveCuffs = (finalArgs.length > 1) ? finalArgs[1] : null; return giveItem(sender, "hfactions.admin.givehandcuffs", itemManager::getHandcuffsItem, "Наручники", targetGiveCuffs);
-            case "giveprotocol": final String targetGiveProto = (finalArgs.length > 1) ? finalArgs[1] : null; return giveItem(sender, "hfactions.admin.giveprotocol", itemManager::getProtocolItem, "Протокол", targetGiveProto);
-            // --- ИСПРАВЛЕННЫЙ ВЫЗОВ GETLANGMESSAGE ---
-            default: plugin.logInfo("[DEBUG] Unknown subcommand '" + subCommand + "' by " + sender.getName()); Utils.msg(sender, configManager.getLangMessage("unknown-command", Map.of("command", commandLabel), "&cНеизвестная команда. /" + commandLabel + " help")); return true;
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        // Проверка на null для основных менеджеров
+        if (configManager == null || playerManager == null || factionManager == null) {
+            sender.sendMessage(ChatColor.RED + "Internal plugin error. Please contact an administrator. (Null Manager)");
+            return true;
         }
-    }
 
-    // --- Обработчик подкоманд /hf territory ---
-    private boolean handleTerritoryCommand(CommandSender sender, String subCommand, final String[] args) {
-        plugin.logInfo("[DEBUG] Executing 'territory' subcommand '" + subCommand + "' for " + sender.getName());
-        // --- ИСПРАВЛЕННЫЕ ВЫЗОВЫ GETLANGMESSAGE ---
-        if (!configManager.isDynmapEnabled()) { Utils.msg(sender, configManager.getLangMessage("territory-dynmap-disabled", "&cИнтеграция с Dynmap отключена.")); return true; }
-        if (dynmapManager == null) { Utils.msg(sender, configManager.getLangMessage("territory-dynmap-error", "&cОшибка интеграции с Dynmap.")); plugin.logError("DynmapManager is null!"); return true; }
-        boolean isAdmin = sender.hasPermission("hfactions.admin.territory") || sender.hasPermission("hfactions.admin.*"); boolean isLeader = isLeader(sender); Faction senderFaction = (sender instanceof Player) ? playerManager.getPlayerFaction(((Player)sender).getUniqueId()) : null;
+        if (args.length == 0) {
+            sendHelp(sender);
+            return true;
+        }
+
+        String subCommand = args[0].toLowerCase();
+        String[] subArgs = Arrays.copyOfRange(args, 1, args.length); // Аргументы для подкоманды
+
+        // --- Обработка подкоманд ---
         switch (subCommand) {
-            case "list": final String listFactionId = (args.length > 0) ? args[0] : (isLeader && senderFaction != null ? senderFaction.getId() : null); return listTerritories(sender, listFactionId);
-            case "define": if (!isAdmin && !isLeader) return noPermissionTerritory(sender); if (!(sender instanceof Player)) return requiresPlayerTerritory(sender); if (args.length < 1) return usage(sender, "hf territory define <название_зоны>"); final String defineZoneName = args[0]; return startDefiningTerritory(sender, defineZoneName);
-            case "corner": if (!isAdmin && !isLeader) return noPermissionTerritory(sender); if (!(sender instanceof Player)) return requiresPlayerTerritory(sender); return addTerritoryCorner(sender);
-            case "clear": if (!isAdmin && !isLeader) return noPermissionTerritory(sender); if (!(sender instanceof Player)) return requiresPlayerTerritory(sender); return clearTerritoryCorners(sender);
-            case "claim":
-                if (!isAdmin && !isLeader) return noPermissionTerritory(sender); if (!(sender instanceof Player)) return requiresPlayerTerritory(sender); if (args.length < 1) return usage(sender, "hf territory claim <название_зоны> [id_фракции (админ)]");
-                final String claimZoneName = args[0]; String tempClaimFactionId = null; if (isLeader && senderFaction != null) tempClaimFactionId = senderFaction.getId(); if (isAdmin && args.length >= 2) tempClaimFactionId = args[1];
-                final String claimFactionId = tempClaimFactionId;
-                if (claimFactionId == null) { Utils.msg(sender, configManager.getLangMessage("territory-claim-no-faction-admin", "&cУкажите ID фракции (админ).")); return true; } return claimTerritory(sender, claimZoneName, claimFactionId);
+            // --- Информационные команды (в основном default: true) ---
+            case "help":
+                handleHelp(sender, label);
+                break;
+            case "list":
+                handleList(sender);
+                break;
+            case "info":
+                handleInfo(sender, subArgs, label);
+                break;
+            case "listrecipes":
+                handleListRecipes(sender);
+                break;
+
+            // --- Команды игрока (требуют Player) ---
+            case "leave":
+                handleLeave(sender);
+                break;
+            case "chat": case "c": case "fc": case "fchat":
+                handleChatToggle(sender);
+                break;
+            case "balance": case "bal":
+                handleBalanceView(sender);
+                break;
+            case "deposit": case "dep":
+                handleDeposit(sender, subArgs, label);
+                break;
+            case "withdraw": case "wd":
+                handleWithdraw(sender, subArgs, label);
+                break;
+            case "warehouse": case "wh":
+                handleWarehouseOpen(sender);
+                break;
+
+            // --- Команды управления фракцией (требуют Player + права ранга) ---
+            case "invite":
+                handleInvite(sender, subArgs, label);
+                break;
+            case "kick":
+                handleKick(sender, subArgs, label);
+                break;
+            case "promote":
+                handlePromote(sender, subArgs, label);
+                break;
+            case "demote":
+                handleDemote(sender, subArgs, label);
+                break;
+            case "setrank":
+                handleSetRank(sender, subArgs, label);
+                break;
+            case "manageranks":
+                handleManageRanks(sender);
+                break;
+
+            // --- Команды специфичных фракций (PD) ---
+            case "fine":
+                handleFine(sender, subArgs, label);
+                break;
+
+            // --- Команды территорий (Dynmap) ---
+            case "territory":
+                handleTerritory(sender, subArgs, label);
+                break;
+
+            // --- Административные команды ---
+            case "reload":
+                handleReload(sender);
+                break;
+            case "create":
+                handleCreate(sender, subArgs, label);
+                break;
             case "delete":
-                if (!isAdmin && !isLeader) return noPermissionTerritory(sender); if (args.length < 1) return usage(sender, "hf territory delete <название_зоны>");
-                final String deleteZoneName = args[0]; final Faction finalSenderFaction = senderFaction; final boolean finalIsLeader = isLeader;
-                return deleteTerritory(sender, deleteZoneName, finalSenderFaction, finalIsLeader);
-            case "map": if (!isAdmin) return noPermissionTerritory(sender); return updateMap(sender);
-            case "help": return showTerritoryHelp(sender);
-            // --- ИСПРАВЛЕННЫЙ ВЫЗОВ GETLANGMESSAGE ---
-            default: Utils.msg(sender, configManager.getLangMessage("territory-unknown-subcommand", "&cНеизвестная подкоманда территории. /hf territory help")); return true;
-        }
-    }
+                handleDelete(sender, subArgs, label);
+                break;
+            case "setbalance":
+                handleSetBalance(sender, subArgs, label);
+                break;
+            case "uncuff":
+                handleUncuff(sender, subArgs, label);
+                break;
+            case "adminmode":
+                handleAdminMode(sender, subArgs, label);
+                break;
+            case "givetaser":
+            case "givehandcuffs":
+            case "giveprotocol":
+                handleGiveItem(sender, subCommand, subArgs, label);
+                break;
 
-
-    // --- Реализация подкоманд ---
-
-    private boolean showHelp(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running showHelp for " + sender.getName());
-        // --- ИСПРАВЛЕННЫЕ ВЫЗОВЫ GETLANGMESSAGE ---
-        Utils.msg(sender, configManager.getLangMessage("help-header", "&b--- HFactions Помощь ---"));
-        String helpFormat = configManager.getLangMessage("help-format", "&7{command} - {description}");
-        if (sender.hasPermission("hfactions.command.list")) Utils.msg(sender, helpFormat.replace("{command}", "/hf list").replace("{description}", "Список фракций"));
-        if (sender.hasPermission("hfactions.command.info")) Utils.msg(sender, helpFormat.replace("{command}", "/hf info [id]").replace("{description}", "Инфо о фракции"));
-        if (sender.hasPermission("hfactions.command.listrecipes")) Utils.msg(sender, helpFormat.replace("{command}", "/hf listrecipes").replace("{description}", "Доступные крафты"));
-        if (sender instanceof Player && sender.hasPermission("hfactions.player.leave")) Utils.msg(sender, helpFormat.replace("{command}", "/hf leave").replace("{description}", "Покинуть фракцию"));
-        if (sender instanceof Player && sender.hasPermission("hfactions.faction.invite")) Utils.msg(sender, helpFormat.replace("{command}", "/hf invite <ник>").replace("{description}", "Пригласить"));
-        if (sender instanceof Player && sender.hasPermission("hfactions.faction.kick")) Utils.msg(sender, helpFormat.replace("{command}", "/hf kick <ник>").replace("{description}", "Исключить"));
-        if (sender instanceof Player && sender.hasPermission("hfactions.faction.promote")) Utils.msg(sender, helpFormat.replace("{command}", "/hf promote <ник>").replace("{description}", "Повысить"));
-        if (sender instanceof Player && sender.hasPermission("hfactions.faction.demote")) Utils.msg(sender, helpFormat.replace("{command}", "/hf demote <ник>").replace("{description}", "Понизить"));
-        if (sender instanceof Player && sender.hasPermission("hfactions.faction.setrank")) Utils.msg(sender, helpFormat.replace("{command}", "/hf setrank <ник> <id>").replace("{description}", "Установить ранг"));
-        if (sender instanceof Player && sender.hasPermission("hfactions.faction.manage_ranks")) Utils.msg(sender, helpFormat.replace("{command}", "/hf manageranks").replace("{description}", "Управление рангами"));
-        if (configManager.isWarehouseEnabled() && sender.hasPermission(configManager.getWarehouseOpenPermission())) Utils.msg(sender, helpFormat.replace("{command}", "/hf warehouse (wh)").replace("{description}", "Склад фракции"));
-        if (economy != null) {
-            if (sender instanceof Player && sender.hasPermission("hfactions.faction.balance.view")) Utils.msg(sender, helpFormat.replace("{command}", "/hf balance (bal)").replace("{description}", "Баланс фракции"));
-            if (sender instanceof Player && sender.hasPermission("hfactions.faction.deposit")) Utils.msg(sender, helpFormat.replace("{command}", "/hf deposit <сумма>").replace("{description}", "Внести"));
-            if (sender instanceof Player && sender.hasPermission("hfactions.faction.withdraw")) Utils.msg(sender, helpFormat.replace("{command}", "/hf withdraw <сумма>").replace("{description}", "Снять"));
-        }
-        if (configManager.isFactionChatEnabled()) Utils.msg(sender, helpFormat.replace("{command}", "/hf chat (c, fc)").replace("{description}", "Фракционный чат"));
-        if (configManager.isFiningEnabled() && sender.hasPermission(configManager.getFinePermissionNode())) Utils.msg(sender, helpFormat.replace("{command}", "/hf fine <ник> <сумма> <причина>").replace("{description}", "Штраф (PD)"));
-        if (configManager.isDynmapEnabled() && (sender.hasPermission("hfactions.admin.territory") || isLeader(sender))) Utils.msg(sender, helpFormat.replace("{command}", "/hf territory help").replace("{description}", "Команды территорий"));
-        if (sender.hasPermission("hfactions.admin.uncuff")) Utils.msg(sender, helpFormat.replace("{command}", "/hf uncuff <ник>").replace("{description}", "Снять наручники (админ)"));
-        if (sender.hasPermission("hfactions.admin.create")) Utils.msg(sender, helpFormat.replace("{command}", "/hf create <id> \"<Назв>\" <тип>").replace("{description}", "Создать фракцию"));
-        if (sender.hasPermission("hfactions.admin.delete")) Utils.msg(sender, helpFormat.replace("{command}", "/hf delete <id>").replace("{description}", "Удалить фракцию"));
-        if (sender.hasPermission("hfactions.admin.reload")) Utils.msg(sender, helpFormat.replace("{command}", "/hf reload").replace("{description}", "Перезагрузить конфиги"));
-        if (sender.hasPermission("hfactions.admin.setbalance")) Utils.msg(sender, helpFormat.replace("{command}", "/hf setbalance <id> <сумма>").replace("{description}", "Установить баланс"));
-        if (sender.hasPermission("hfactions.admin.adminmode")) Utils.msg(sender, helpFormat.replace("{command}", "/hf adminmode [id]").replace("{description}", "Админ режим фракции"));
-        return true;
-    }
-
-    private boolean listFactions(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running listFactions for " + sender.getName());
-        Collection<Faction> factions = factionManager.getAllFactions();
-        // --- ИСПРАВЛЕННЫЙ ВЫЗОВ GETLANGMESSAGE ---
-        if (factions.isEmpty()) { Utils.msg(sender, configManager.getLangMessage("list-empty", "&7На сервере пока нет фракций.")); return true; }
-        Utils.msg(sender, configManager.getLangMessage("list-header", "&b--- Список Фракций ---"));
-        for (Faction faction : factions) {
-            List<UUID> members = factionManager.getFactionMembers(faction.getId());
-            UUID leaderUUID = members.stream().filter(uuid -> Integer.valueOf(11).equals(playerManager.getPlayerRankId(uuid))).findFirst().orElse(null);
-            // --- ИСПРАВЛЕННЫЙ ВЫЗОВ GETLANGMESSAGE ---
-            String leaderName = configManager.getLangMessage("list-leader-none", "Нет");
-            if (leaderUUID != null) { OfflinePlayer lo = Bukkit.getOfflinePlayer(leaderUUID); leaderName = lo.getName() != null ? lo.getName() : "???"; }
-            // --- ИСПРАВЛЕННЫЙ ВЫЗОВ GETLANGMESSAGE ---
-            Utils.msg(sender, configManager.getLangMessage("list-entry", Map.of("prefix_colored", faction.getFormattedPrefix().trim(), "name", faction.getName(), "id", faction.getId(), "members", String.valueOf(members.size()), "leader", leaderName), "{prefix_colored} {name} &7({id}): &7Участников: {members}, Лидер: {leader}"));
+            default:
+                sender.sendMessage(configManager.getMessage("command.unknown", "&cUnknown command: /" + label + " " + subCommand));
+                sender.sendMessage(configManager.getMessage("command.usage_help", "&eUse '/" + label + " help' for assistance."));
+                break;
         }
         return true;
     }
 
-    private boolean showFactionInfo(CommandSender sender, String targetFactionId) {
-        plugin.logInfo("[DEBUG] Running showFactionInfo for " + sender.getName() + (targetFactionId != null ? " target: " + targetFactionId : " (self)"));
-        Faction faction; boolean viewingOwn = false;
-        if (targetFactionId == null) {
-            if (!(sender instanceof Player)) return usage(sender, "hf info <id_фракции>");
-            Player player = (Player) sender; faction = playerManager.getPlayerFaction(player.getUniqueId());
-            if (faction == null) { Utils.msg(sender, configManager.getLangMessage("must-be-in-faction", "&cВы не состоите во фракции.")); return true; } viewingOwn = true;
+    // --- Обработчики подкоманд ---
+
+    private void handleHelp(CommandSender sender, String label) {
+        // Право: hfactions.command.help (default: true) - Проверять не обязательно, но можно
+        sendHelp(sender); // Вызываем отдельный метод для чистоты
+    }
+
+    private void handleList(CommandSender sender) {
+        // Право: hfactions.command.list (default: true)
+        if (factionManager == null) {
+            sender.sendMessage(ChatColor.RED + "Internal error: FactionManager not available.");
+            return;
+        }
+        sender.sendMessage(Utils.color(configManager.getMessage("list.header", "&6--- Factions List ---")));
+        Map<String, Faction> allFactions = factionManager.getAllFactions();
+        if (allFactions.isEmpty()) {
+            sender.sendMessage(Utils.color(configManager.getMessage("list.no_factions", "&7No factions have been created yet.")));
+            return;
+        }
+        allFactions.values().stream()
+                .sorted(Comparator.comparing(Faction::getName, String.CASE_INSENSITIVE_ORDER)) // Сортируем по имени
+                .forEach(faction -> {
+                    String prefix = faction.getPrefix() != null ? faction.getPrefix() : "";
+                    String name = faction.getName() != null ? faction.getName() : "Unnamed";
+                    String id = faction.getId();
+                    String type = faction.getType() != null ? faction.getType().name() : "UNKNOWN";
+                    String format = configManager.getMessage("list.entry", "{prefix} &f{name} &7(ID: {id}, Type: {type})");
+                    sender.sendMessage(Utils.color(format
+                            .replace("{prefix}", prefix)
+                            .replace("{name}", name)
+                            .replace("{id}", id)
+                            .replace("{type}", type)
+                    ));
+                });
+    }
+
+    private void handleInfo(CommandSender sender, String[] args, String label) {
+        // Право: hfactions.command.info (default: true)
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} info <faction_id>").replace("{label}", label));
+            return;
+        }
+        String factionId = args[0].toLowerCase();
+        if (factionManager == null) {
+            sender.sendMessage(ChatColor.RED + "Internal error: FactionManager not available.");
+            return;
+        }
+        Faction faction = factionManager.getFaction(factionId);
+        if (faction == null) {
+            sender.sendMessage(configManager.getMessage("faction.not_found", "&cFaction with ID '{id}' not found.").replace("{id}", factionId));
+            return;
+        }
+
+        String header = configManager.getMessage("info.header", "&6--- Faction Info: {prefix} {name} &6---")
+                .replace("{prefix}", faction.getPrefix())
+                .replace("{name}", faction.getName());
+        sender.sendMessage(Utils.color(header));
+
+        // Используем строки из конфига для каждой детали
+        sender.sendMessage(Utils.color(configManager.getMessage("info.line.id", "&eID: &f{value}").replace("{value}", faction.getId())));
+        sender.sendMessage(Utils.color(configManager.getMessage("info.line.type", "&eType: &f{value}").replace("{value}", faction.getType().name())));
+        sender.sendMessage(Utils.color(configManager.getMessage("info.line.color", "&eColor: &f{value}").replace("{value}", faction.getColor())));
+        sender.sendMessage(Utils.color(configManager.getMessage("info.line.prefix", "&ePrefix: &f{value} ({formatted})")
+                .replace("{value}", faction.getPrefix())
+                .replace("{formatted}", Utils.color(faction.getPrefix()))));
+
+        // Баланс (проверяем Vault)
+        if (vaultIntegration != null) {
+            String balanceStr = vaultIntegration.format(faction.getBalance());
+            sender.sendMessage(Utils.color(configManager.getMessage("info.line.balance", "&eBalance: &a{value}").replace("{value}", balanceStr)));
         } else {
-            faction = factionManager.getFaction(targetFactionId);
-            if (faction == null) { Utils.msg(sender, configManager.getLangMessage("faction-not-found", Map.of("id", targetFactionId), "&cФракция с ID '{id}' не найдена.")); return true; }
-            if (sender instanceof Player) viewingOwn = faction.equals(playerManager.getPlayerFaction(((Player) sender).getUniqueId()));
+            sender.sendMessage(Utils.color(configManager.getMessage("info.line.balance_no_vault", "&eBalance: &f{value} (Vault not found)").replace("{value}", String.format(Locale.US, "%.2f", faction.getBalance()))));
         }
-        Utils.msg(sender, configManager.getLangMessage("info-header", Map.of("highlight", configManager.getHighlightColor(), "faction_name", faction.getName()), "&b--- Инфо: {highlight}{faction_name}&b ---"));
-        Utils.msg(sender, configManager.getLangMessage("info-id", Map.of("highlight", configManager.getHighlightColor(), "id", faction.getId()), "&7ID: {highlight}{id}"));
-        Utils.msg(sender, configManager.getLangMessage("info-type", Map.of("highlight", configManager.getHighlightColor(), "type", faction.getType().name()), "&7Тип: {highlight}{type}"));
-        Utils.msg(sender, configManager.getLangMessage("info-prefix", Map.of("prefix_colored", faction.getFormattedPrefix().trim()), "&7Префикс: {prefix_colored}"));
-        List<UUID> members = factionManager.getFactionMembers(faction.getId());
-        Utils.msg(sender, configManager.getLangMessage("info-members", Map.of("highlight", configManager.getHighlightColor(), "count", String.valueOf(members.size())), "&7Участников: {highlight}{count}"));
-        UUID leaderUUID = members.stream().filter(uuid -> Integer.valueOf(11).equals(playerManager.getPlayerRankId(uuid))).findFirst().orElse(null);
-        String leaderName = configManager.getLangMessage("list-leader-none", "Нет"); if (leaderUUID != null) { OfflinePlayer lo = Bukkit.getOfflinePlayer(leaderUUID); leaderName = lo.getName() != null ? lo.getName() : "???"; }
-        Utils.msg(sender, configManager.getLangMessage("info-leader", Map.of("highlight", configManager.getHighlightColor(), "name", leaderName), "&7Лидер: {highlight}{name}"));
-        if (economy != null && (viewingOwn || sender.hasPermission("hfactions.admin.*"))) { Utils.msg(sender, configManager.getLangMessage("info-balance", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(faction.getBalance()), "currency", economy.currencyNamePlural()), "&7Баланс: {highlight}{amount} {currency}")); }
-        if (viewingOwn && sender instanceof Player) { Player player = (Player) sender; Integer rankId = playerManager.getPlayerRankId(player.getUniqueId()); if (rankId != null) { FactionRank rank = faction.getRank(rankId); if (rank != null) { Utils.msg(sender, configManager.getLangMessage("info-your-rank", Map.of("highlight", configManager.getHighlightColor(), "rank_name", rank.getDisplayName(), "rank_id", String.valueOf(rankId)), "&7Ваш ранг: {highlight}{rank_name} ({rank_id})")); } } }
-        return true;
+
+        sender.sendMessage(Utils.color(configManager.getMessage("info.line.warehouse_size", "&eWarehouse Size: &f{value}").replace("{value}", String.valueOf(faction.getWarehouseSize()))));
+
+        // Ранги
+        sender.sendMessage(Utils.color(configManager.getMessage("info.line.ranks_header", "&eRanks ({count}):").replace("{count}", String.valueOf(faction.getRanks().size()))));
+        String rankFormat = configManager.getMessage("info.line.rank_entry", "  &7- [{id}] {name} (Salary: &a{salary}&7)");
+        faction.getRanks().values().stream()
+                .sorted(Comparator.comparingInt(FactionRank::getInternalId))
+                .forEach(rank -> sender.sendMessage(Utils.color(rankFormat
+                        .replace("{id}", String.valueOf(rank.getInternalId()))
+                        .replace("{name}", rank.getDisplayName())
+                        .replace("{salary}", vaultIntegration != null ? vaultIntegration.format(rank.getSalary()) : String.format(Locale.US, "%.2f", rank.getSalary()))
+                )));
+
+        // Участники онлайн
+        List<Player> onlineMembers = playerManager.getOnlineFactionMembers(faction.getId());
+        sender.sendMessage(Utils.color(configManager.getMessage("info.line.members_online", "&eMembers Online ({count}): {list}")
+                .replace("{count}", String.valueOf(onlineMembers.size()))
+                .replace("{list}", onlineMembers.isEmpty() ? "&7None" : onlineMembers.stream().map(Player::getName).collect(Collectors.joining(", ")))
+        ));
     }
 
-    private boolean listCustomRecipes(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running listCustomRecipes for " + sender.getName());
-        Map<String, CustomCraftingRecipe> recipes = craftingManager.getCustomRecipes();
-        if (recipes.isEmpty()) { Utils.msg(sender, configManager.getLangMessage("recipes-empty", "&7Нет доступных кастомных рецептов.")); return true; }
-        Utils.msg(sender, configManager.getLangMessage("recipes-header", "&b--- Кастомные Рецепты HFactions ---"));
-        boolean isPlayer = sender instanceof Player; Player player = isPlayer ? (Player) sender : null;
-        for (CustomCraftingRecipe customRecipe : recipes.values()) {
-            StringBuilder details = new StringBuilder(); ItemStack result = customRecipe.resultItem; String resultName;
-            if (result.hasItemMeta()) { ItemMeta resultMeta = result.getItemMeta(); if (resultMeta != null && resultMeta.hasDisplayName() && !resultMeta.getDisplayName().isEmpty()) resultName = resultMeta.getDisplayName(); else resultName = configManager.getHighlightColor() + result.getType().name().toLowerCase().replace('_', ' '); } else resultName = configManager.getHighlightColor() + result.getType().name().toLowerCase().replace('_', ' ');
-            details.append(ChatColor.translateAlternateColorCodes('&', resultName));
-            List<String> requirements = new ArrayList<>(); boolean playerCanCraftThis = true;
-            if (customRecipe.permissionRequired) { if (customRecipe.permissionNode == null || customRecipe.permissionNode.isEmpty()) { requirements.add(configManager.getLangMessage("recipes-config-error-perm", "&cПраво не задано!")); playerCanCraftThis = false; } else { boolean hasPerm = isPlayer && player.hasPermission(customRecipe.permissionNode); requirements.add(configManager.getLangMessage("recipes-requirement-perm", Map.of("status_color", hasPerm ? configManager.getSuccessColor() : configManager.getErrorColor(), "permission", customRecipe.permissionNode), "{status_color}Право: {permission}")); if (!hasPerm) playerCanCraftThis = false; } }
-            if (!customRecipe.allowedFactionIds.isEmpty()) { Faction playerFaction = isPlayer ? playerManager.getPlayerFaction(player.getUniqueId()) : null; boolean inAllowedFaction = playerFaction != null && customRecipe.allowedFactionIds.contains(playerFaction.getId()); String factionList = String.join(", ", customRecipe.allowedFactionIds).toUpperCase(); requirements.add(configManager.getLangMessage("recipes-requirement-faction", Map.of("status_color", inAllowedFaction ? configManager.getSuccessColor() : configManager.getErrorColor(), "factions", factionList), "{status_color}Фракции: {factions}")); if (!inAllowedFaction || (isPlayer && playerFaction == null)) playerCanCraftThis = false; }
-            if (!requirements.isEmpty()) { String reqString = String.join(configManager.getLangMessage("recipes-req-separator", "&7, "), requirements); String prefix = configManager.getLangMessage("recipes-requirements-prefix", Map.of("status_color", isPlayer ? (playerCanCraftThis ? configManager.getSuccessColor() : configManager.getErrorColor()) : configManager.getSecondaryColor()), " {status_color}[&fТребования: "); String suffix = configManager.getLangMessage("recipes-requirements-suffix", Map.of("status_color", isPlayer ? (playerCanCraftThis ? configManager.getSuccessColor() : configManager.getErrorColor()) : configManager.getSecondaryColor()), "{status_color}]"); details.append(" ").append(prefix).append(reqString).append(suffix); }
-            else { details.append(configManager.getLangMessage("recipes-available-all", " &a[Доступно всем]")); }
-            Utils.msg(sender, details.toString());
+    private void handleListRecipes(CommandSender sender) {
+        // Право: hfactions.command.listrecipes (default: true)
+        if (plugin.getCraftingManager() == null) {
+            sender.sendMessage(ChatColor.RED + "Internal error: CraftingManager not available.");
+            return;
         }
-        return true;
+        sender.sendMessage(Utils.color(configManager.getMessage("recipes.header", "&6--- Custom Recipes ---")));
+        Map<String, ?> customRecipes = plugin.getCraftingManager().getCustomRecipes(); // Получаем информацию о рецептах
+        if (customRecipes.isEmpty()) {
+            sender.sendMessage(Utils.color(configManager.getMessage("recipes.no_recipes", "&7No custom recipes are available.")));
+            return;
+        }
+        // TODO: Реализовать красивый вывод рецептов (ингредиенты, результат)
+        sender.sendMessage(Utils.color("&eAvailable recipe IDs: &f" + String.join(", ", customRecipes.keySet())));
+        sender.sendMessage(Utils.color("&7(Detailed recipe view not implemented yet)"));
     }
 
-    private boolean leaveFaction(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running leaveFaction for " + sender.getName());
-        Player player = (Player) sender; Faction faction = playerManager.getPlayerFaction(player.getUniqueId());
-        if (faction == null) { Utils.msg(player, configManager.getLangMessage("must-be-in-faction")); return true; }
-        if (isLeader(sender)) { Utils.msg(player, configManager.getLangMessage("leave-leader")); return true; }
-        if (playerManager.setPlayerFactionAndRank(player.getUniqueId(), null, 0)) { Utils.msg(player, configManager.getLangMessage("leave-success", String.valueOf(Map.of("highlight", configManager.getHighlightColor(), "faction_name", faction.getName())))); }
-        else { Utils.msg(player, configManager.getLangMessage("leave-fail")); }
-        return true;
+    private void handleLeave(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.player.leave (default: true)
+        playerManager.leaveFaction(player); // Логика и сообщения внутри PlayerManager
     }
 
-    private boolean invitePlayer(CommandSender sender, String targetPlayerName) {
-        plugin.logInfo("[DEBUG] Running invitePlayer for " + sender.getName() + " target: " + targetPlayerName);
-        Player inviter = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(inviter);
-        if (!effData.isInFaction()) { Utils.msg(inviter, configManager.getLangMessage("invite-no-faction")); return true; }
-        if (!hasRankPermission(inviter, effData.faction(), effData.rankId(), "hfactions.faction.invite") && !inviter.hasPermission("hfactions.admin.*")) return noPermission(inviter);
-        Player targetPlayer = Bukkit.getPlayerExact(targetPlayerName); if (targetPlayer == null) { Utils.msg(inviter, configManager.getLangMessage("player-not-found", String.valueOf(Map.of("player", targetPlayerName)))); return true; }
-        if (inviter.getUniqueId().equals(targetPlayer.getUniqueId())) { Utils.msg(inviter, configManager.getLangMessage("cannot-do-self")); return true; }
-        if (playerManager.getPlayerFaction(targetPlayer.getUniqueId()) != null) { Utils.msg(inviter, configManager.getLangMessage("target-already-in-faction", String.valueOf(Map.of("player", targetPlayer.getName())))); return true; }
-        if (playerManager.hasPendingInvite(targetPlayer.getUniqueId())) { Utils.msg(inviter, configManager.getLangMessage("invite-already-pending", String.valueOf(Map.of("player", targetPlayer.getName())))); return true; }
-        if (playerManager.createInvite(targetPlayer.getUniqueId(), inviter.getUniqueId(), effData.faction().getId())) { Utils.msg(inviter, configManager.getLangMessage("invite-success-sender", String.valueOf(Map.of("highlight", configManager.getHighlightColor(), "player", targetPlayer.getName(), "faction_name", effData.faction().getName())))); Utils.msg(targetPlayer, configManager.getLangMessage("invite-success-target-header")); Utils.msg(targetPlayer, configManager.getLangMessage("invite-success-target-body", Map.of("highlight", configManager.getHighlightColor(), "inviter", inviter.getName(), "faction_name", effData.faction().getName()))); Utils.msg(targetPlayer, configManager.getLangMessage("invite-success-target-header")); guiManager.openInviteGui(targetPlayer, inviter.getName(), effData.faction().getId()); }
-        else { Utils.msg(inviter, configManager.getLangMessage("invite-fail-create")); }
-        return true;
+    private void handleChatToggle(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.player.chat (default: true)
+        playerManager.toggleFactionChat(player); // Логика и сообщения внутри PlayerManager
     }
 
-    private boolean kickPlayer(CommandSender sender, String targetPlayerName) {
-        plugin.logInfo("[DEBUG] Running kickPlayer for " + sender.getName() + " target: " + targetPlayerName);
-        Player kicker = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(kicker);
-        if (!effData.isInFaction()) { Utils.msg(kicker, configManager.getLangMessage("kick-no-faction")); return true; }
-        boolean isAdminMode = playerManager.isInAdminMode(kicker.getUniqueId()); boolean canKick = hasRankPermission(kicker, effData.faction(), effData.rankId(), "hfactions.faction.kick") || isAdminMode || kicker.hasPermission("hfactions.admin.*");
-        if (!canKick) return noPermission(kicker);
-        OfflinePlayer targetOffline = Utils.getOfflinePlayer(targetPlayerName); if (targetOffline == null || (!targetOffline.hasPlayedBefore() && !targetOffline.isOnline())) { Utils.msg(kicker, configManager.getLangMessage("player-never-played", Map.of("player", targetPlayerName))); return true; }
-        UUID targetUuid = targetOffline.getUniqueId(); String targetName = targetOffline.getName() != null ? targetOffline.getName() : targetPlayerName; if (kicker.getUniqueId().equals(targetUuid)) { Utils.msg(kicker, configManager.getLangMessage("cannot-do-self")); return true; }
-        Faction targetFaction = playerManager.getPlayerFaction(targetUuid); if (targetFaction == null || !targetFaction.getId().equals(effData.faction().getId())) { Utils.msg(kicker, configManager.getLangMessage("kick-target-not-in-faction", Map.of("player", targetName, "admin_suffix", isAdminMode ? " админ. режима." : "."))); return true; }
-        Integer targetRankId = playerManager.getPlayerRankId(targetUuid); if (targetRankId == null) { plugin.logError("Target rank ID null in kickPlayer!"); return true; }
-        if (!isAdminMode && targetRankId >= effData.rankId() && !kicker.hasPermission("hfactions.admin.*")) { Utils.msg(kicker, configManager.getLangMessage("kick-rank-hierarchy")); return true; }
-        if (playerManager.setPlayerFactionAndRank(targetUuid, null, 0)) { Utils.msg(kicker, configManager.getLangMessage("kick-success-kicker", String.valueOf(Map.of("highlight", configManager.getHighlightColor(), "player", targetName)))); if (targetOffline.isOnline() && targetOffline.getPlayer() != null) { Utils.msg(targetOffline.getPlayer(), configManager.getLangMessage("kick-success-target", Map.of("highlight", configManager.getHighlightColor(), "faction_name", effData.faction().getName()))); } }
-        else { Utils.msg(kicker, configManager.getLangMessage("kick-fail", Map.of("player", targetName))); }
-        return true;
+    private void handleBalanceView(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            // Консоль может смотреть баланс? Допустим, нет.
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.balance.view (выдается рангу)
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        if (!player.hasPermission("hfactions.faction.balance.view")) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.balance.view")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
+
+        if (vaultIntegration != null) {
+            String balanceStr = vaultIntegration.format(faction.getBalance());
+            String msg = configManager.getMessage("balance.view", "&aFaction Balance: {balance}");
+            player.sendMessage(Utils.color(msg.replace("{balance}", balanceStr)));
+        } else {
+            String msg = configManager.getMessage("balance.view_no_vault", "&eFaction Balance: {balance} (Vault not found)");
+            player.sendMessage(Utils.color(msg.replace("{balance}", String.format(Locale.US, "%.2f", faction.getBalance()))));
+        }
     }
 
-    private boolean promotePlayer(CommandSender sender, String targetPlayerName) {
-        plugin.logInfo("[DEBUG] Running promotePlayer for " + sender.getName() + " target: " + targetPlayerName);
-        Player promoter = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(promoter);
-        if (!effData.isInFaction()) { Utils.msg(promoter, configManager.getLangMessage("rank-change-no-faction")); return true; }
-        boolean isAdminMode = playerManager.isInAdminMode(promoter.getUniqueId()); boolean canPromote = hasRankPermission(promoter, effData.faction(), effData.rankId(), "hfactions.faction.promote") || isAdminMode || promoter.hasPermission("hfactions.admin.*");
-        if (!canPromote) return noPermission(promoter);
-        OfflinePlayer targetOffline = Utils.getOfflinePlayer(targetPlayerName); if (targetOffline == null || (!targetOffline.hasPlayedBefore() && !targetOffline.isOnline())) { Utils.msg(promoter, configManager.getLangMessage("player-never-played", Map.of("player", targetPlayerName))); return true; }
-        UUID targetUuid = targetOffline.getUniqueId(); String targetName = targetOffline.getName() != null ? targetOffline.getName() : targetPlayerName; if (promoter.getUniqueId().equals(targetUuid)) { Utils.msg(promoter, configManager.getLangMessage("cannot-do-self")); return true; }
-        Faction targetFaction = playerManager.getPlayerFaction(targetUuid); if (targetFaction == null || !targetFaction.getId().equals(effData.faction().getId())) { Utils.msg(promoter, configManager.getLangMessage("rank-change-target-not-in-faction", Map.of("player", targetName, "admin_suffix", isAdminMode ? " админ. режима." : "."))); return true; }
-        Integer targetRankId = playerManager.getPlayerRankId(targetUuid); if (targetRankId == null) return true;
-        if (!isAdminMode && targetRankId >= effData.rankId() && !promoter.hasPermission("hfactions.admin.*")) { Utils.msg(promoter, configManager.getLangMessage("rank-change-hierarchy-self")); return true; }
-        int maxRankId = 11; if (targetRankId >= maxRankId) { Utils.msg(promoter, configManager.getLangMessage("rank-change-max-rank", Map.of("player", targetName))); return true; }
-        int newRankId = targetRankId + 1; if (!isAdminMode && newRankId > effData.rankId() && !promoter.hasPermission("hfactions.admin.*")) { Utils.msg(promoter, configManager.getLangMessage("rank-change-hierarchy-target")); return true; }
-        if (playerManager.changePlayerRank(targetUuid, newRankId)) { FactionRank newRank = effData.faction().getRank(newRankId); String newRankName = (newRank != null) ? newRank.getDisplayName() : String.valueOf(newRankId); Utils.msg(promoter, configManager.getLangMessage("promote-success-promoter", Map.of("highlight", configManager.getHighlightColor(), "player", targetName, "rank_name", newRankName))); if (targetOffline.isOnline() && targetOffline.getPlayer() != null) { Utils.msg(targetOffline.getPlayer(), configManager.getLangMessage("promote-success-target", Map.of("highlight", configManager.getHighlightColor(), "rank_name", newRankName))); } }
-        else { Utils.msg(promoter, configManager.getLangMessage("promote-fail", Map.of("player", targetName))); }
-        return true;
-    }
+    private void handleDeposit(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.deposit (выдается рангу)
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} deposit <amount>").replace("{label}", label));
+            return;
+        }
 
-    private boolean demotePlayer(CommandSender sender, String targetPlayerName) {
-        plugin.logInfo("[DEBUG] Running demotePlayer for " + sender.getName() + " target: " + targetPlayerName);
-        Player demoter = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(demoter);
-        if (!effData.isInFaction()) { Utils.msg(demoter, configManager.getLangMessage("rank-change-no-faction")); return true; }
-        boolean isAdminMode = playerManager.isInAdminMode(demoter.getUniqueId()); boolean canDemote = hasRankPermission(demoter, effData.faction(), effData.rankId(), "hfactions.faction.demote") || isAdminMode || demoter.hasPermission("hfactions.admin.*");
-        if (!canDemote) return noPermission(demoter);
-        OfflinePlayer targetOffline = Utils.getOfflinePlayer(targetPlayerName); if (targetOffline == null || (!targetOffline.hasPlayedBefore() && !targetOffline.isOnline())) { Utils.msg(demoter, configManager.getLangMessage("player-never-played", Map.of("player", targetPlayerName))); return true; }
-        UUID targetUuid = targetOffline.getUniqueId(); String targetName = targetOffline.getName() != null ? targetOffline.getName() : targetPlayerName; if (demoter.getUniqueId().equals(targetUuid)) { Utils.msg(demoter, configManager.getLangMessage("cannot-do-self")); return true; }
-        Faction targetFaction = playerManager.getPlayerFaction(targetUuid); if (targetFaction == null || !targetFaction.getId().equals(effData.faction().getId())) { Utils.msg(demoter, configManager.getLangMessage("rank-change-target-not-in-faction", Map.of("player", targetName, "admin_suffix", isAdminMode ? " админ. режима." : "."))); return true; }
-        Integer targetRankId = playerManager.getPlayerRankId(targetUuid); if (targetRankId == null) return true;
-        if (!isAdminMode && targetRankId >= effData.rankId() && !demoter.hasPermission("hfactions.admin.*")) { Utils.msg(demoter, configManager.getLangMessage("rank-change-hierarchy-self")); return true; }
-        int minRankId = 1; if (targetRankId <= minRankId) { Utils.msg(demoter, configManager.getLangMessage("rank-change-min-rank", Map.of("player", targetName))); return true; }
-        int newRankId = targetRankId - 1;
-        if (playerManager.changePlayerRank(targetUuid, newRankId)) { FactionRank newRank = effData.faction().getRank(newRankId); String newRankName = (newRank != null) ? newRank.getDisplayName() : String.valueOf(newRankId); Utils.msg(demoter, configManager.getLangMessage("demote-success-demoter", Map.of("highlight", configManager.getHighlightColor(), "player", targetName, "rank_name", newRankName))); if (targetOffline.isOnline() && targetOffline.getPlayer() != null) { Utils.msg(targetOffline.getPlayer(), configManager.getLangMessage("demote-success-target", Map.of("highlight", configManager.getHighlightColor(), "rank_name", newRankName))); } }
-        else { Utils.msg(demoter, configManager.getLangMessage("demote-fail", Map.of("player", targetName))); }
-        return true;
-    }
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
 
-    private boolean setPlayerRankCommand(CommandSender sender, String targetPlayerName, String rankIdStr) {
-        plugin.logInfo("[DEBUG] Running setPlayerRankCommand for " + sender.getName() + " target: " + targetPlayerName + " rank: " + rankIdStr);
-        Player setter = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(setter);
-        if (!effData.isInFaction()) { Utils.msg(setter, configManager.getLangMessage("rank-change-no-faction")); return true; }
-        boolean isAdminMode = playerManager.isInAdminMode(setter.getUniqueId()); boolean canSetRank = hasRankPermission(setter, effData.faction(), effData.rankId(), "hfactions.faction.setrank") || isAdminMode || setter.hasPermission("hfactions.admin.*");
-        if (!canSetRank) return noPermission(setter);
-        OfflinePlayer targetOffline = Utils.getOfflinePlayer(targetPlayerName); if (targetOffline == null || (!targetOffline.hasPlayedBefore() && !targetOffline.isOnline())) { Utils.msg(setter, configManager.getLangMessage("player-never-played", Map.of("player", targetPlayerName))); return true; }
-        UUID targetUuid = targetOffline.getUniqueId(); String targetName = targetOffline.getName() != null ? targetOffline.getName() : targetPlayerName;
-        if (setter.getUniqueId().equals(targetUuid) && !isAdminMode && !setter.hasPermission("hfactions.admin.*")) { Utils.msg(setter, configManager.getLangMessage("cannot-do-self")); return true; }
-        Faction targetFaction = playerManager.getPlayerFaction(targetUuid); if (targetFaction == null || !targetFaction.getId().equals(effData.faction().getId())) { Utils.msg(setter, configManager.getLangMessage("rank-change-target-not-in-faction", Map.of("player", targetName, "admin_suffix", isAdminMode ? " админ. режима." : "."))); return true; }
-        Integer targetRankId = playerManager.getPlayerRankId(targetUuid); if (targetRankId == null) return true;
-        int newRankId; try { newRankId = Integer.parseInt(rankIdStr); } catch (NumberFormatException e) { Utils.msg(setter, configManager.getLangMessage("invalid-number")); return true; }
-        if (effData.faction().getRank(newRankId) == null) { Utils.msg(setter, configManager.getLangMessage("rank-change-invalid-id", Map.of("id", String.valueOf(newRankId)))); return true; }
-        if (!isAdminMode && !setter.hasPermission("hfactions.admin.*")) { if (newRankId >= effData.rankId()) { Utils.msg(setter, configManager.getLangMessage("rank-change-hierarchy-target")); return true; } if (targetRankId >= effData.rankId()) { Utils.msg(setter, configManager.getLangMessage("rank-change-hierarchy-self")); return true; } }
-        if (playerManager.changePlayerRank(targetUuid, newRankId)) { FactionRank newRank = effData.faction().getRank(newRankId); String newRankName = newRank.getDisplayName(); Utils.msg(setter, configManager.getLangMessage("setrank-success-setter", Map.of("highlight", configManager.getHighlightColor(), "player", targetName, "rank_name", newRankName, "rank_id", String.valueOf(newRankId)))); if (targetOffline.isOnline() && targetOffline.getPlayer() != null) { Utils.msg(targetOffline.getPlayer(), configManager.getLangMessage("setrank-success-target", Map.of("highlight", configManager.getHighlightColor(), "rank_name", newRankName))); } }
-        else { Utils.msg(setter, configManager.getLangMessage("setrank-fail", Map.of("player", targetName))); }
-        return true;
-    }
+        if (!player.hasPermission("hfactions.faction.deposit")) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.deposit")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
 
-    private boolean manageRanksGui(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running manageRanksGui for " + sender.getName());
-        Player player = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(player);
-        if (!effData.isInFaction()) { Utils.msg(player, configManager.getLangMessage("rank-change-no-faction")); return true; }
-        boolean isAdminMode = playerManager.isInAdminMode(player.getUniqueId());
-        if (!isAdminMode && !isLeader(sender)) { if (!hasRankPermission(player, effData.faction(), effData.rankId(), "hfactions.faction.manage_ranks")) return noPermission(player); }
-        guiManager.openRankManagementGui(player, effData.faction());
-        return true;
-    }
+        if (vaultIntegration == null) {
+            player.sendMessage(configManager.getMessage("economy.vault_missing", "&cEconomy features are disabled (Vault not found)."));
+            return;
+        }
 
-    private boolean viewBalance(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running viewBalance for " + sender.getName());
-        Player player = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(player);
-        if (!effData.isInFaction()) { Utils.msg(player, configManager.getLangMessage("must-be-in-faction")); return true; }
-        Utils.msg(player, configManager.getLangMessage("balance-info", Map.of("faction_name", effData.faction().getName(), "success", configManager.getSuccessColor(), "amount", moneyFormat.format(effData.faction().getBalance()), "currency", economy.currencyNamePlural())));
-        return true;
-    }
-
-    private boolean depositMoney(CommandSender sender, String amountStr) {
-        plugin.logInfo("[DEBUG] Running depositMoney for " + sender.getName() + " amount: " + amountStr);
-        Player player = (Player) sender; Faction faction = playerManager.getPlayerFaction(player.getUniqueId());
-        if (faction == null) { Utils.msg(player, configManager.getLangMessage("must-be-in-faction")); return true; }
-        if (!player.hasPermission(configManager.getWarehouseDepositPermission()) && !player.hasPermission("hfactions.admin.*")) return noPermission(sender);
-        double amount; try { amount = Double.parseDouble(amountStr); if (amount <= 0) throw new NumberFormatException(); amount = Math.round(amount * 100.0) / 100.0; } catch (NumberFormatException e) { Utils.msg(player, configManager.getLangMessage("invalid-amount-positive")); return true; }
-        double playerBalance = economy.getBalance(player); if (playerBalance < amount) { Utils.msg(player, configManager.getLangMessage("deposit-not-enough-money", Map.of("player_balance", moneyFormat.format(playerBalance), "amount_needed", moneyFormat.format(amount)))); return true; }
-        EconomyResponse response = economy.withdrawPlayer(player, amount);
-        if (response.transactionSuccess()) { faction.deposit(amount); faction.addTransactionLog("deposit", player.getName(), amount, "Внесение средств"); factionManager.saveFactionsConfig(); Utils.msg(player, configManager.getLangMessage("deposit-success", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(amount), "currency", economy.currencyNamePlural()))); Utils.msg(player, configManager.getLangMessage("deposit-new-balance", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(faction.getBalance())))); }
-        else { Utils.msg(player, configManager.getLangMessage("deposit-fail-withdraw", Map.of("error", response.errorMessage))); }
-        return true;
-    }
-
-    private boolean withdrawMoney(CommandSender sender, String amountStr) {
-        plugin.logInfo("[DEBUG] Running withdrawMoney for " + sender.getName() + " amount: " + amountStr);
-        Player player = (Player) sender; EffectiveFactionData effData = getEffectiveFactionData(player);
-        if (!effData.isInFaction()) { Utils.msg(player, configManager.getLangMessage("must-be-in-faction")); return true; }
-        boolean isAdminMode = playerManager.isInAdminMode(player.getUniqueId()); boolean canWithdraw = hasRankPermission(player, effData.faction(), effData.rankId(), "hfactions.faction.withdraw") || hasRankPermission(player, effData.faction(), effData.rankId(), "hfactions.faction.manage_balance") || isAdminMode || player.hasPermission("hfactions.admin.*");
-        if (!canWithdraw) return noPermission(sender);
-        double amount; try { amount = Double.parseDouble(amountStr); if (amount <= 0) throw new NumberFormatException(); amount = Math.round(amount * 100.0) / 100.0; } catch (NumberFormatException e) { Utils.msg(player, configManager.getLangMessage("invalid-amount-positive")); return true; }
-        double factionBalance = effData.faction().getBalance(); if (factionBalance < amount) { Utils.msg(player, configManager.getLangMessage("withdraw-not-enough-faction", Map.of("faction_balance", moneyFormat.format(factionBalance), "amount_needed", moneyFormat.format(amount)))); return true; }
-        if (effData.faction().withdraw(amount)) { EconomyResponse response = economy.depositPlayer(player, amount); if (response.transactionSuccess()) { effData.faction().addTransactionLog("withdraw", player.getName(), -amount, "Снятие средств"); factionManager.saveFactionsConfig(); Utils.msg(player, configManager.getLangMessage("withdraw-success", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(amount), "faction_name", effData.faction().getName()))); Utils.msg(player, configManager.getLangMessage("withdraw-new-balance", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(effData.faction().getBalance())))); } else { effData.faction().deposit(amount); Utils.msg(player, configManager.getLangMessage("withdraw-fail-deposit")); plugin.logError("Failed to deposit withdrawn money to " + player.getName() + ": " + response.errorMessage); } }
-        else { Utils.msg(player, configManager.getLangMessage("withdraw-fail-faction")); }
-        return true;
-    }
-
-    private boolean toggleFactionChatCommand(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running toggleFactionChatCommand for " + sender.getName());
-        Player player = (Player) sender; if (!configManager.isFactionChatEnabled()) { Utils.msg(player, configManager.getLangMessage("chat-disabled")); return true; } if (playerManager.getPlayerFaction(player.getUniqueId()) == null) { Utils.msg(player, configManager.getLangMessage("must-be-in-faction")); return true; }
-        playerManager.toggleFactionChat(player.getUniqueId()); boolean isInChat = playerManager.isPlayerInFactionChat(player.getUniqueId());
-        Utils.msg(player, configManager.getLangMessage(isInChat ? "chat-toggle-on" : "chat-toggle-off", Map.of("highlight", configManager.getHighlightColor())));
-        return true;
-    }
-
-    private boolean openWarehouse(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running openWarehouse for " + sender.getName());
-        Player player = (Player) sender; if (!configManager.isWarehouseEnabled()) { Utils.msg(player, configManager.getLangMessage("warehouse-disabled")); return true; }
-        EffectiveFactionData effData = getEffectiveFactionData(player); if (!effData.isInFaction()) { Utils.msg(player, configManager.getLangMessage("must-be-in-faction")); return true; }
-        if (!player.hasPermission(configManager.getWarehouseOpenPermission()) && !player.hasPermission("hfactions.admin.*")) return noPermission(player);
-        guiManager.openWarehouseGui(player, effData.faction(), 1);
-        return true;
-    }
-
-    private boolean issueFine(CommandSender sender, String targetPlayerName, String amountStr, String reason) {
-        plugin.logInfo("[DEBUG] Running issueFine for " + sender.getName() + " target: " + targetPlayerName + " amount: " + amountStr);
-        Player officer = (Player) sender; if (economy == null) { Utils.msg(officer, configManager.getLangMessage("economy-disabled")); return true; }
-        String requiredFactionId = configManager.getFineAllowedFactionId(); Faction officerFaction = playerManager.getPlayerFaction(officer.getUniqueId()); if (officerFaction == null || !officerFaction.getId().equals(requiredFactionId)) { Utils.msg(officer, configManager.getLangMessage("fine-wrong-faction", Map.of("faction_id", requiredFactionId.toUpperCase()))); return true; }
-        Integer officerRankId = playerManager.getPlayerRankId(officer.getUniqueId()); if (officerRankId == null) return true; String permNode = configManager.getFinePermissionNode(); int minRankId = configManager.getFineMinRankId(); if (!officer.hasPermission(permNode)) return noPermission(officer); if (minRankId > 0 && officerRankId < minRankId && !officer.hasPermission("hfactions.admin.*")) { Utils.msg(officer, configManager.getLangMessage("fine-rank-too-low", Map.of("min_rank", String.valueOf(minRankId)))); return true; }
-        if (isOnFineGlobalCooldown(officer.getUniqueId())) { Utils.msg(officer, configManager.getLangMessage("fine-global-cooldown", Map.of("seconds", String.valueOf(getFineGlobalCooldownSecondsLeft(officer.getUniqueId()))))); return true; }
-        Player targetPlayer = Bukkit.getPlayerExact(targetPlayerName); if (targetPlayer == null) { Utils.msg(officer, configManager.getLangMessage("player-not-found", Map.of("player", targetPlayerName))); return true; } UUID targetUuid = targetPlayer.getUniqueId();
-        if (isOnFineTargetCooldown(officer.getUniqueId(), targetUuid)) { Utils.msg(officer, configManager.getLangMessage("fine-target-cooldown", Map.of("time_left", getFineTargetCooldownTimeLeft(officer.getUniqueId(), targetUuid)))); return true; }
-        if (officer.getUniqueId().equals(targetUuid)) { Utils.msg(officer, configManager.getLangMessage("cannot-do-self")); return true; }
-        double amount; double minAmount = configManager.getFineMinAmount(); double maxAmount = configManager.getFineMaxAmount(); try { amount = Double.parseDouble(amountStr); if (amount < minAmount || amount > maxAmount) throw new NumberFormatException(); amount = Math.round(amount * 100.0) / 100.0; } catch (NumberFormatException e) { Utils.msg(officer, configManager.getLangMessage("invalid-amount-range", Map.of("min", moneyFormat.format(minAmount), "max", moneyFormat.format(maxAmount)))); return true; }
-        if (reason.trim().isEmpty()) { Utils.msg(officer, configManager.getLangMessage("fine-invalid-reason")); return true; }
-        double targetBalance = economy.getBalance(targetPlayer); if (targetBalance < amount) { Utils.msg(officer, configManager.getLangMessage("fine-target-not-enough-money", Map.of("player", targetPlayer.getName(), "target_balance", moneyFormat.format(targetBalance), "amount", moneyFormat.format(amount)))); return true; }
-        EconomyResponse withdrawalResponse = economy.withdrawPlayer(targetPlayer, amount); if (!withdrawalResponse.transactionSuccess()) { Utils.msg(officer, configManager.getLangMessage("fine-fail-withdraw-target", Map.of("player", targetPlayer.getName(), "error", withdrawalResponse.errorMessage))); return true; }
-        String destinationType = configManager.getFineMoneyDestination(); String depositTargetName = "никуда (удалено)"; boolean savedFaction = false; Faction recipientFaction = null; // Для лога
-        switch (destinationType) { case "FACTION": officerFaction.deposit(amount); depositTargetName = "фракцию " + officerFaction.getName(); savedFaction=true; recipientFaction = officerFaction; break; case "GOVERNMENT": String govId = configManager.getFineGovernmentFactionId(); Faction gov = factionManager.getFaction(govId); if (gov != null) { gov.deposit(amount); depositTargetName = "фракцию " + gov.getName(); savedFaction=true; recipientFaction = gov;} else { depositTargetName="никуда (GOV не найдена)"; } break; case "PLAYER": EconomyResponse dr=economy.depositPlayer(officer, amount); if (!dr.transactionSuccess()) { economy.depositPlayer(targetPlayer, amount); Utils.msg(officer, configManager.getLangMessage("fine-fail-deposit-officer")); return true; } depositTargetName="ваш счет"; break; default: break; }
-        if(savedFaction) factionManager.saveFactionsConfig(); // Сохраняем баланс
-        if(recipientFaction != null) { recipientFaction.addTransactionLog("fine", targetPlayer.getName(), amount, "Штраф от " + officer.getName() + ": " + reason); factionManager.saveFactionsConfig(); } // Сохраняем лог
-        setFineCooldowns(officer.getUniqueId(), targetUuid);
-        Map<String, String> fineInfo = Map.of("highlight", configManager.getHighlightColor(), "player", targetPlayer.getName(), "amount", moneyFormat.format(amount), "currency", economy.currencyNamePlural(), "reason", reason); Utils.msg(officer, configManager.getLangMessage("fine-success-officer", fineInfo)); Utils.msg(officer, configManager.getLangMessage("fine-success-officer-destination", Map.of("destination", depositTargetName)));
-        Map<String, String> fineInfoTarget = Map.of("highlight", configManager.getHighlightColor(), "officer", officer.getName(), "amount", moneyFormat.format(amount), "currency", economy.currencyNamePlural(), "reason", reason); Utils.msg(targetPlayer, configManager.getLangMessage("fine-success-target", fineInfoTarget)); Utils.msg(targetPlayer, configManager.getLangMessage("fine-success-target-balance", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(economy.getBalance(targetPlayer)))));
-        if (configManager.logFines()) plugin.logInfo(configManager.getFineLogFormat().replace("{officer}", officer.getName()).replace("{target}", targetPlayer.getName()).replace("{amount}", moneyFormat.format(amount)).replace("{reason}", reason));
-        return true;
-    }
-
-    private boolean uncuffCommand(CommandSender sender, String targetPlayerName) {
-        plugin.logInfo("[DEBUG] Running uncuffCommand for " + sender.getName() + " target: " + targetPlayerName);
-        OfflinePlayer targetOffline = Utils.getOfflinePlayer(targetPlayerName); if (targetOffline == null || (!targetOffline.hasPlayedBefore() && !targetOffline.isOnline())) { Utils.msg(sender, configManager.getLangMessage("player-never-played", Map.of("player", targetPlayerName))); return true; }
-        UUID targetUuid = targetOffline.getUniqueId(); String targetName = targetOffline.getName() != null ? targetOffline.getName() : targetPlayerName;
-        if (!cuffManager.isCuffed(targetUuid)) { Utils.msg(sender, configManager.getLangMessage("uncuff-target-not-cuffed", Map.of("player", targetName))); return true; }
-        Player remover = (sender instanceof Player) ? (Player) sender : null;
-        if (cuffManager.uncuffPlayer(targetUuid, remover)) { Utils.msg(sender, configManager.getLangMessage("uncuff-success", Map.of("highlight", configManager.getHighlightColor(), "player", targetName))); }
-        else { Utils.msg(sender, configManager.getLangMessage("uncuff-fail", Map.of("player", targetName))); }
-        return true;
-    }
-
-    private boolean createFaction(CommandSender sender, String id, String name, String typeStr) {
-        plugin.logInfo("[DEBUG] Running createFaction for " + sender.getName() + " id: " + id);
-        if (!id.matches("^[a-zA-Z0-9_]+$")) { Utils.msg(sender, configManager.getLangMessage("create-id-format")); return true; }
-        if (id.length() > 16) { Utils.msg(sender, configManager.getLangMessage("create-id-length")); return true; }
-        if (factionManager.factionExists(id)) { Utils.msg(sender, configManager.getLangMessage("create-id-exists", Map.of("id", id))); return true; }
-        FactionType type; try { type = FactionType.valueOf(typeStr.toUpperCase()); } catch (IllegalArgumentException e) { Utils.msg(sender, configManager.getLangMessage("create-invalid-type")); return true; }
-        Faction newFaction = factionManager.createFaction(id, name, type);
-        if (newFaction != null) { Utils.msg(sender, configManager.getLangMessage("create-success", Map.of("name", name, "id", id))); }
-        else { Utils.msg(sender, configManager.getLangMessage("create-fail")); }
-        return true;
-    }
-
-    private boolean deleteFaction(CommandSender sender, String id) {
-        plugin.logInfo("[DEBUG] Running deleteFaction for " + sender.getName() + " id: " + id);
-        Faction faction = factionManager.getFaction(id); if (faction == null) { Utils.msg(sender, configManager.getLangMessage("faction-not-found", Map.of("id", id))); return true; }
-        String name = faction.getName();
-        if (factionManager.deleteFaction(id)) { Utils.msg(sender, configManager.getLangMessage("delete-success", Map.of("name", name, "id", id))); }
-        else { Utils.msg(sender, configManager.getLangMessage("delete-fail", Map.of("id", id))); }
-        return true;
-    }
-
-    private boolean reloadPlugin(CommandSender sender) {
-        plugin.logInfo("[DEBUG] Running reloadPlugin for " + sender.getName());
-        plugin.logInfo("Reloading HFactions requested by " + sender.getName());
+        double amount;
         try {
-            if (playerManager != null) playerManager.saveAllPlayerData(); if (factionManager != null) factionManager.saveFactionsConfig();
-            if (configManager != null) configManager.loadConfigs(); if (factionManager != null) factionManager.loadFactions();
-            if (playerManager != null) playerManager.loadAllPlayerData(); if (craftingManager != null) craftingManager.loadRecipesFromConfig();
-            if (dynmapManager != null && configManager.isDynmapEnabled()) { dynmapManager.loadTerritories(); dynmapManager.renderAllTerritories(); }
-            plugin.startPaydayTask(); // Перезапускаем Payday
-            Utils.msg(sender, configManager.getLangMessage("reload-success"));
-        } catch (Exception e) { Utils.msg(sender, configManager.getLangMessage("reload-fail")); plugin.logError("Error during plugin reload:"); e.printStackTrace(); }
-        return true;
+            amount = Double.parseDouble(args[0]);
+            if (amount <= 0) {
+                player.sendMessage(configManager.getMessage("economy.invalid_amount_positive", "&cAmount must be positive."));
+                return;
+            }
+        } catch (NumberFormatException e) {
+            player.sendMessage(configManager.getMessage("economy.invalid_amount_number", "&cInvalid amount specified."));
+            return;
+        }
+
+        // Снимаем деньги у игрока
+        if (vaultIntegration.withdraw(player.getUniqueId(), amount)) {
+            // Вносим во фракцию
+            if (factionManager.depositToFaction(faction.getId(), amount)) {
+                String formattedAmount = vaultIntegration.format(amount);
+                String msg = configManager.getMessage("deposit.success", "&aSuccessfully deposited {amount} into the faction treasury.");
+                player.sendMessage(Utils.color(msg.replace("{amount}", formattedAmount)));
+                // Логирование во фракцию?
+                String logMsg = configManager.getMessage("deposit.log", "&e{player} deposited {amount} into the treasury.");
+                playerManager.broadcastToFaction(faction.getId(), Utils.color(logMsg
+                        .replace("{player}", player.getName())
+                        .replace("{amount}", formattedAmount)));
+            } else {
+                // Ошибка взноса (не должно случиться, если фракция есть) - возвращаем деньги игроку
+                vaultIntegration.deposit(player.getUniqueId(), amount); // Возврат
+                player.sendMessage(configManager.getMessage("deposit.error_faction", "&cInternal error depositing to faction. Money refunded."));
+            }
+        } else {
+            player.sendMessage(configManager.getMessage("economy.not_enough_money", "&cYou don't have enough money to deposit that amount."));
+        }
     }
 
-    private boolean setBalanceAdmin(CommandSender sender, String factionId, String amountStr) {
-        plugin.logInfo("[DEBUG] Running setBalanceAdmin for " + sender.getName() + " faction: " + factionId + " amount: " + amountStr);
-        Faction faction = factionManager.getFaction(factionId); if (faction == null) { Utils.msg(sender, configManager.getLangMessage("faction-not-found", Map.of("id", factionId))); return true; }
-        double amount; try { amount = Double.parseDouble(amountStr); if (amount < 0) throw new NumberFormatException(); amount = Math.round(amount * 100.0) / 100.0; } catch (NumberFormatException e) { Utils.msg(sender, configManager.getLangMessage("invalid-number")); return true; }
-        faction.setBalance(amount);
-        faction.addTransactionLog("admin_set", sender.getName(), amount - faction.getBalance() /* Дельта */, "Установка баланса админом");
-        factionManager.saveFactionsConfig();
-        Utils.msg(sender, configManager.getLangMessage("setbalance-success", Map.of("name", faction.getName(), "amount", moneyFormat.format(amount))));
-        plugin.logInfo("Faction " + faction.getId() + " balance set to " + amount + " by admin " + sender.getName());
-        return true;
+    private void handleWithdraw(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.withdraw ИЛИ hfactions.faction.manage_balance
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} withdraw <amount>").replace("{label}", label));
+            return;
+        }
+
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        // Проверка прав
+        boolean canWithdraw = player.hasPermission("hfactions.faction.withdraw") || player.hasPermission("hfactions.faction.manage_balance");
+        if (!canWithdraw) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank != null) {
+                List<String> perms = rank.getPermissions();
+                if (perms.contains("hfactions.faction.withdraw") || perms.contains("hfactions.faction.manage_balance")) {
+                    canWithdraw = true;
+                }
+            }
+        }
+        if (!canWithdraw) {
+            player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+
+
+        if (vaultIntegration == null) {
+            player.sendMessage(configManager.getMessage("economy.vault_missing", "&cEconomy features are disabled (Vault not found)."));
+            return;
+        }
+
+        double amount;
+        try {
+            amount = Double.parseDouble(args[0]);
+            if (amount <= 0) {
+                player.sendMessage(configManager.getMessage("economy.invalid_amount_positive", "&cAmount must be positive."));
+                return;
+            }
+        } catch (NumberFormatException e) {
+            player.sendMessage(configManager.getMessage("economy.invalid_amount_number", "&cInvalid amount specified."));
+            return;
+        }
+
+        // Снимаем деньги у фракции
+        if (factionManager.withdrawFromFaction(faction.getId(), amount)) {
+            // Начисляем игроку
+            if (vaultIntegration.deposit(player.getUniqueId(), amount)) {
+                String formattedAmount = vaultIntegration.format(amount);
+                String msg = configManager.getMessage("withdraw.success", "&aSuccessfully withdrew {amount} from the faction treasury.");
+                player.sendMessage(Utils.color(msg.replace("{amount}", formattedAmount)));
+                // Логирование
+                String logMsg = configManager.getMessage("withdraw.log", "&e{player} withdrew {amount} from the treasury.");
+                playerManager.broadcastToFaction(faction.getId(), Utils.color(logMsg
+                        .replace("{player}", player.getName())
+                        .replace("{amount}", formattedAmount)));
+            } else {
+                // Ошибка начисления игроку - возвращаем фракции
+                factionManager.depositToFaction(faction.getId(), amount); // Возврат
+                player.sendMessage(configManager.getMessage("withdraw.error_player", "&cCould not deposit money into your account. Funds returned to faction."));
+            }
+        } else {
+            player.sendMessage(configManager.getMessage("withdraw.not_enough_funds", "&cThe faction does not have enough funds to withdraw that amount."));
+        }
     }
 
-    private boolean toggleAdminMode(CommandSender sender, @Nullable String factionId) {
-        plugin.logInfo("[DEBUG] Running toggleAdminMode for " + sender.getName() + (factionId != null ? " target: " + factionId : " (exit)"));
-        if (!(sender instanceof Player)) return requiresPlayer(sender); Player admin = (Player) sender;
-        String messageKey = playerManager.toggleAdminMode(admin, factionId); // Возвращает ключ для сообщения
-        Faction targetFaction = factionId != null ? factionManager.getFaction(factionId) : null;
-        String defaultMsg = "&cОшибка обработки режима админа."; // Дефолт на случай невалидного ключа
-        Utils.msg(admin, configManager.getLangMessage(messageKey, Map.of("highlight", configManager.getHighlightColor(), "faction_id", Objects.toString(factionId, ""), "faction_name", targetFaction != null ? targetFaction.getName() : "" ), defaultMsg ));
-        return true;
+    private void handleWarehouseOpen(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.warehouse.open (проверяется внутри GuiManager)
+        if (guiManager == null) {
+            player.sendMessage(ChatColor.RED + "Internal error: GuiManager not available.");
+            return;
+        }
+        guiManager.openWarehouseGUI(player, 1); // Открываем первую страницу
     }
 
-    private boolean giveItem(CommandSender sender, String permission, Supplier<ItemStack> itemSupplier, String itemName, @Nullable String targetName) {
-        plugin.logInfo("[DEBUG] Running giveItem for " + sender.getName() + " item: " + itemName + (targetName != null ? " target: " + targetName : ""));
-        if (!sender.hasPermission(permission)) return noPermission(sender); Player target = null; if (targetName != null) { target = Bukkit.getPlayerExact(targetName); if (target == null) { Utils.msg(sender, configManager.getLangMessage("player-not-found", Map.of("player", targetName))); return true; } } else if (sender instanceof Player) { target = (Player) sender; }
-        if (target == null) return requiresPlayerOrArg(sender); ItemStack item = itemSupplier.get(); if (item == null || item.getType() == Material.BARRIER) { Utils.msg(sender, configManager.getLangMessage("item-give-fail", Map.of("item", itemName))); return true; }
-        HashMap<Integer, ItemStack> didntFit = target.getInventory().addItem(item);
-        if (!didntFit.isEmpty()){ Utils.msg(sender, configManager.getLangMessage("item-give-inventory-full", Map.of("player", target.getName()))); }
-        else { Utils.msg(sender, configManager.getLangMessage("item-give-success-sender", Map.of("item", itemName, "player", target.getName()))); Utils.msg(target, configManager.getLangMessage("item-give-success-target", Map.of("item", itemName))); }
-        return true;
+
+    private void handleInvite(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.invite
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} invite <player_name>").replace("{label}", label));
+            return;
+        }
+
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        // Проверка прав
+        if (!player.hasPermission("hfactions.faction.invite")) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.invite")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
+
+        Player target = Bukkit.getPlayerExact(args[0]);
+        if (target == null || !target.isOnline()) {
+            player.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+            return;
+        }
+
+        // Доп. проверки
+        if (target.getUniqueId().equals(player.getUniqueId())) {
+            player.sendMessage(configManager.getMessage("invite.cant_invite_self", "&cYou cannot invite yourself."));
+            return;
+        }
+        if (playerManager.isInFaction(target)) {
+            String targetFacName = playerManager.getPlayerFaction(target).getName();
+            String msg = configManager.getMessage("invite.target_already_in", "&c{target_name} is already in the {faction_name} faction.");
+            player.sendMessage(Utils.color(msg.replace("{target_name}", target.getName()).replace("{faction_name}", targetFacName)));
+            return;
+        }
+        if (playerManager.getInvite(target) != null) {
+            String msg = configManager.getMessage("invite.target_has_pending", "&c{target_name} already has a pending faction invite.");
+            player.sendMessage(Utils.color(msg.replace("{target_name}", target.getName())));
+            return;
+        }
+
+        // Создаем и отправляем приглашение
+        PendingInvite invite = new PendingInvite(player.getUniqueId(), player.getName(), faction.getId(), faction.getName());
+        playerManager.addInvite(target, invite); // Отправляет сообщение цели и запускает таймер
+
+        // Открываем GUI у цели
+        if (guiManager != null) {
+            guiManager.openInviteGUI(target, invite);
+        } else {
+            target.sendMessage(Utils.color("&e(Internal error: Cannot open invite GUI)")); // Сообщаем об ошибке, если GUI не работает
+        }
+
+
+        String msg = configManager.getMessage("invite.sent", "&aInvite sent to {target_name}. They have {seconds} seconds to accept.");
+        long expireSeconds = configManager.getConfig().getLong("faction.invite_expire_seconds", 60);
+        player.sendMessage(Utils.color(msg.replace("{target_name}", target.getName()).replace("{seconds}", String.valueOf(expireSeconds))));
+
     }
 
-    // --- Методы для подкоманд территории ---
-    private boolean listTerritories(CommandSender sender, String factionIdFilter) { plugin.logInfo("[DEBUG][Territory] Running listTerritories"); Collection<TerritoryData> tList; String title; String hC=configManager.getHighlightColor(), pC=configManager.getPrimaryColor(), sC=configManager.getSecondaryColor(); if(factionIdFilter!=null){ Faction f=factionManager.getFaction(factionIdFilter); if(f==null){Utils.msg(sender, configManager.getLangMessage("faction-not-found", Map.of("id", factionIdFilter))); return true;} tList=dynmapManager.getFactionTerritories(f.getId()); title=configManager.getLangMessage("territory-list-header", Map.of("faction_name", f.getName(), "highlight", hC, "primary", pC));}else{ tList=dynmapManager.getAllTerritories(); title=configManager.getLangMessage("territory-list-header-all");} if(tList.isEmpty()){Utils.msg(sender, configManager.getLangMessage("territory-list-empty", sC+(factionIdFilter!=null?"Нет территорий.":"Нет захваченных."))); return true;} Utils.msg(sender, title); for(TerritoryData d:tList){Faction o=factionManager.getFaction(d.factionId); String oN=(o!=null)?o.getName():"???"; Utils.msg(sender, configManager.getLangMessage("territory-list-entry", Map.of("highlight", hC, "secondary", sC, "primary", pC, "zone", d.zoneName, "id", d.factionId, "owner", oN, "world", d.worldName, "corners", String.valueOf(d.corners.size()))));} return true; }
-    private boolean startDefiningTerritory(CommandSender sender, String zoneName) { plugin.logInfo("[DEBUG][Territory] Running startDefiningTerritory"); Player p=(Player)sender; UUID uuid=p.getUniqueId(); if(!zoneName.matches("^[a-zA-Z0-9_]+$")){Utils.msg(p, configManager.getLangMessage("territory-define-name-format"));return true;} if(zoneName.length()>32){Utils.msg(p, configManager.getLangMessage("territory-define-name-length"));return true;} if(dynmapManager.getTerritory(zoneName)!=null){Utils.msg(p, configManager.getLangMessage("territory-define-already-exists", Map.of("name", zoneName)));return true;} territoryCorners.put(uuid, new ArrayList<>()); Utils.msg(p, configManager.getLangMessage("territory-define-started", Map.of("highlight", configManager.getHighlightColor(), "name", zoneName, "success", configManager.getSuccessColor()))); Utils.msg(p, configManager.getLangMessage("territory-define-prompt-corner")); Utils.msg(p, configManager.getLangMessage("territory-define-prompt-clear")); Utils.msg(p, configManager.getLangMessage("territory-define-prompt-claim", Map.of("name", zoneName))); return true; }
-    private boolean addTerritoryCorner(CommandSender sender) { plugin.logInfo("[DEBUG][Territory] Running addTerritoryCorner"); Player p=(Player)sender; UUID uuid=p.getUniqueId(); if(!territoryCorners.containsKey(uuid)){Utils.msg(p, configManager.getLangMessage("territory-corner-not-started")); return true;} List<Location> corners=territoryCorners.get(uuid); Location cLoc=p.getLocation(); if(!corners.isEmpty()&&!Objects.equals(corners.get(0).getWorld(),cLoc.getWorld())){Utils.msg(p, configManager.getLangMessage("territory-corner-wrong-world", Map.of("current", cLoc.getWorld().getName(), "first", corners.get(0).getWorld().getName()))); Utils.msg(p, configManager.getLangMessage("territory-corner-wrong-world")); return true;} corners.add(cLoc); Utils.msg(p, configManager.getLangMessage("territory-corner-added", Map.of("count", String.valueOf(corners.size()), "highlight", configManager.getHighlightColor(), "success", configManager.getSuccessColor(), "x", String.format("%.1f", cLoc.getX()), "z", String.format("%.1f", cLoc.getZ()), "world", cLoc.getWorld().getName()))); if(corners.size()>=3){Utils.msg(p, configManager.getLangMessage("territory-corner-can-claim"));} return true; }
-    private boolean clearTerritoryCorners(CommandSender sender) { plugin.logInfo("[DEBUG][Territory] Running clearTerritoryCorners"); Player p=(Player)sender; UUID uuid=p.getUniqueId(); if(!territoryCorners.containsKey(uuid)){Utils.msg(p, configManager.getLangMessage("territory-clear-not-started")); return true;} territoryCorners.remove(uuid); Utils.msg(p, configManager.getLangMessage("territory-clear-success")); return true; }
-    private boolean claimTerritory(CommandSender sender, String zoneName, String forcedFactionId) { plugin.logInfo("[DEBUG][Territory] Running claimTerritory"); Player p=(Player)sender; UUID uuid=p.getUniqueId(); if(!territoryCorners.containsKey(uuid)){Utils.msg(p, configManager.getLangMessage("territory-claim-not-started")); return true;} List<Location> corners=territoryCorners.get(uuid); if(corners.size()<3){Utils.msg(p, configManager.getLangMessage("territory-claim-not-enough-corners")); return true;} Faction targetFaction=factionManager.getFaction(forcedFactionId); if(targetFaction==null){Utils.msg(p, configManager.getLangMessage("faction-not-found", Map.of("id", forcedFactionId))); return true;} String ownerFactionId=targetFaction.getId(); String worldName=corners.get(0).getWorld().getName(); for(Location loc:corners)if(!Objects.equals(loc.getWorld().getName(),worldName)){Utils.msg(p, configManager.getLangMessage("territory-claim-wrong-world")); return true;} if(dynmapManager.defineTerritory(zoneName, ownerFactionId, worldName, corners)){Utils.msg(p, configManager.getLangMessage("territory-claim-success", Map.of("highlight", configManager.getHighlightColor(), "success", configManager.getSuccessColor(), "zone", zoneName, "faction_id", ownerFactionId.toUpperCase()))); territoryCorners.remove(uuid);} else {Utils.msg(p, configManager.getLangMessage("territory-claim-fail", Map.of("zone", zoneName)));} return true; }
-    private boolean deleteTerritory(CommandSender sender, String zoneName, Faction senderFaction, boolean isSenderLeader) { plugin.logInfo("[DEBUG][Territory] Running deleteTerritory"); TerritoryData territory=dynmapManager.getTerritory(zoneName); if(territory==null){Utils.msg(sender, configManager.getLangMessage("territory-delete-not-found", Map.of("zone", zoneName))); return true;} boolean isAdmin=sender.hasPermission("hfactions.admin.territory"); boolean canDelete=isAdmin; if(!canDelete&&isSenderLeader&&senderFaction!=null&&territory.factionId.equals(senderFaction.getId()))canDelete=true; if(!canDelete) return noPermissionTerritory(sender); if(dynmapManager.deleteTerritory(zoneName)){Utils.msg(sender, configManager.getLangMessage("territory-delete-success", Map.of("highlight", configManager.getHighlightColor(), "success", configManager.getSuccessColor(), "zone", zoneName, "faction_id", territory.factionId.toUpperCase())));} else {Utils.msg(sender, configManager.getLangMessage("territory-delete-fail", Map.of("zone", zoneName)));} return true; }
-    private boolean updateMap(CommandSender sender) { plugin.logInfo("[DEBUG][Territory] Running updateMap"); Utils.msg(sender, configManager.getLangMessage("territory-map-start")); Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> { dynmapManager.renderAllTerritories(); Bukkit.getScheduler().runTask(plugin, () -> Utils.msg(sender, configManager.getLangMessage("territory-map-success"))); }); return true; }
-    private boolean showTerritoryHelp(CommandSender sender) { plugin.logInfo("[DEBUG][Territory] Running showTerritoryHelp"); Utils.msg(sender, configManager.getLangMessage("territory-help-header")); Utils.msg(sender, configManager.getLangMessage("territory-help-entry", Map.of("command", "list [id]", "description", "Список территорий"))); Utils.msg(sender, configManager.getLangMessage("territory-help-entry", Map.of("command", "define <назв>", "description", "Начать определение"))); Utils.msg(sender, configManager.getLangMessage("territory-help-entry", Map.of("command", "corner", "description", "Добавить угол"))); Utils.msg(sender, configManager.getLangMessage("territory-help-entry", Map.of("command", "clear", "description", "Очистить углы"))); Utils.msg(sender, configManager.getLangMessage("territory-help-entry", Map.of("command", "claim <назв> [id]", "description", "Сохранить зону"))); Utils.msg(sender, configManager.getLangMessage("territory-help-entry", Map.of("command", "delete <назв>", "description", "Удалить зону"))); Utils.msg(sender, configManager.getLangMessage("territory-help-entry", Map.of("command", "map", "description", "Обновить карту (админ)"))); return true; }
+
+    private void handleKick(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.kick
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} kick <player_name>").replace("{label}", label));
+            return;
+        }
+
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        // Проверка прав
+        boolean canKick = player.hasPermission("hfactions.faction.kick");
+        if (!canKick) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.kick")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+            canKick = true; // Если право есть в ранге
+        }
 
 
-    // --- Логика оформления штрафа через предмет/чат ---
-    public boolean isPlayerIssuingFine(UUID officerUuid) { return playersIssuingFine.containsKey(officerUuid); }
-    public void startFineProcess(Player officer, Player target) { plugin.logInfo("[DEBUG] Starting fine process for officer " + officer.getName() + " on target " + target.getName()); UUID officerUuid = officer.getUniqueId(); UUID targetUuid = target.getUniqueId(); if (economy == null) { Utils.msg(officer, configManager.getLangMessage("economy-disabled")); return; } String requiredFactionId = configManager.getFineAllowedFactionId(); Faction officerFaction = playerManager.getPlayerFaction(officerUuid); if (officerFaction == null || !officerFaction.getId().equals(requiredFactionId)) { Utils.msg(officer, configManager.getLangMessage("fine-wrong-faction", Map.of("faction_id", requiredFactionId.toUpperCase()))); return; } Integer officerRankId = playerManager.getPlayerRankId(officerUuid); if (officerRankId == null) return; String permNode = configManager.getFinePermissionNode(); int minRankId = configManager.getFineMinRankId(); if (!officer.hasPermission(permNode)) { Utils.msg(officer, configManager.getLangMessage("no-permission", Map.of("permission", permNode))); return; } if (minRankId > 0 && officerRankId < minRankId && !officer.hasPermission("hfactions.admin.*")) { Utils.msg(officer, configManager.getLangMessage("fine-rank-too-low", Map.of("min_rank", String.valueOf(minRankId)))); return; } if (isOnFineGlobalCooldown(officerUuid)) { Utils.msg(officer, configManager.getLangMessage("fine-global-cooldown", Map.of("seconds", String.valueOf(getFineGlobalCooldownSecondsLeft(officerUuid))))); return; } if (isPlayerIssuingFine(officerUuid)) { Utils.msg(officer, configManager.getLangMessage("fine-already-issuing")); return; } if (officerUuid.equals(targetUuid)) { Utils.msg(officer, configManager.getLangMessage("cannot-do-self")); return; } PendingFine pendingFine = new PendingFine(officerUuid, targetUuid); playersIssuingFine.put(officerUuid, pendingFine); Utils.msg(officer, configManager.getLangMessage("fine-started", Map.of("highlight", configManager.getHighlightColor(), "player", target.getName()))); Utils.msg(officer, configManager.getLangMessage("fine-prompt-amount", Map.of("min", moneyFormat.format(configManager.getFineMinAmount()), "max", moneyFormat.format(configManager.getFineMaxAmount())))); Utils.msg(officer, configManager.getLangMessage("fine-prompt-cancel")); }
-    public void cancelFineProcess(UUID officerUuid) { plugin.logInfo("[DEBUG] Cancelling fine process for officer " + officerUuid); if (playersIssuingFine.remove(officerUuid) != null) { Player officer = Bukkit.getPlayer(officerUuid); if (officer != null) Utils.msg(officer, configManager.getLangMessage("fine-cancelled")); } }
-    public void handleFineInput(Player officer, String input) { plugin.logInfo("[DEBUG] Handling fine input '" + input + "' from officer " + officer.getName()); UUID officerUuid = officer.getUniqueId(); if (!isPlayerIssuingFine(officerUuid)) return; PendingFine pendingFine = playersIssuingFine.get(officerUuid); Player target = Bukkit.getPlayer(pendingFine.targetUuid); if (input.equalsIgnoreCase("cancel") || input.equalsIgnoreCase("отмена")) { cancelFineProcess(officerUuid); return; } if (target == null || !target.isOnline()) { cancelFineProcess(officerUuid); Utils.msg(officer, configManager.getLangMessage("player-not-found", Map.of("player", "?"))); return; } if ("amount".equals(pendingFine.state)) { double amount; double minAmount=configManager.getFineMinAmount(); double maxAmount=configManager.getFineMaxAmount(); try { amount=Double.parseDouble(input); if(amount<minAmount||amount>maxAmount)throw new NumberFormatException(); amount=Math.round(amount*100.0)/100.0; } catch (NumberFormatException e) { Utils.msg(officer, configManager.getLangMessage("invalid-amount-range", Map.of("min", moneyFormat.format(minAmount), "max", moneyFormat.format(maxAmount)))); return; } if (isOnFineTargetCooldown(officerUuid, pendingFine.targetUuid)) { Utils.msg(officer, configManager.getLangMessage("fine-target-cooldown", Map.of("time_left", getFineTargetCooldownTimeLeft(officerUuid, pendingFine.targetUuid)))); cancelFineProcess(officerUuid); return; } if (economy.getBalance(target) < amount) { Utils.msg(officer, configManager.getLangMessage("fine-target-not-enough-money", Map.of("player", target.getName(), "target_balance", moneyFormat.format(economy.getBalance(target)), "amount", moneyFormat.format(amount)))); cancelFineProcess(officerUuid); return; } pendingFine.amount = amount; pendingFine.state = "reason"; Utils.msg(officer, configManager.getLangMessage("fine-amount-set", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(amount)))); Utils.msg(officer, configManager.getLangMessage("fine-prompt-reason")); Utils.msg(officer, configManager.getLangMessage("fine-prompt-cancel")); } else if ("reason".equals(pendingFine.state)) { String reason = input.trim(); if (reason.isEmpty()) { Utils.msg(officer, configManager.getLangMessage("fine-invalid-reason")); return; } playersIssuingFine.remove(officerUuid); EconomyResponse withdrawalResponse = economy.withdrawPlayer(target, pendingFine.amount); if (!withdrawalResponse.transactionSuccess()) { Utils.msg(officer, configManager.getLangMessage("fine-fail-withdraw-target", Map.of("player", target.getName(), "error", withdrawalResponse.errorMessage))); return; } String destinationType = configManager.getFineMoneyDestination(); String depositTargetName = "никуда (удалено)"; boolean savedFaction = false; Faction officerFaction = playerManager.getPlayerFaction(officerUuid); Faction recipientFaction = null; switch (destinationType) { case "FACTION": if(officerFaction!=null){officerFaction.deposit(pendingFine.amount); depositTargetName = "фракцию " + officerFaction.getName(); savedFaction=true; recipientFaction = officerFaction;} break; case "GOVERNMENT": String govId = configManager.getFineGovernmentFactionId(); Faction gov = factionManager.getFaction(govId); if (gov != null) { gov.deposit(pendingFine.amount); depositTargetName = "фракцию " + gov.getName(); savedFaction=true; recipientFaction = gov;} else { depositTargetName="никуда (GOV не найдена)"; } break; case "PLAYER": EconomyResponse dr=economy.depositPlayer(officer, pendingFine.amount); if (!dr.transactionSuccess()) { economy.depositPlayer(target, pendingFine.amount); Utils.msg(officer, configManager.getLangMessage("fine-fail-deposit-officer")); return; } depositTargetName="ваш счет"; break; default: break; } if(savedFaction) factionManager.saveFactionsConfig(); if(recipientFaction != null) { recipientFaction.addTransactionLog("fine", target.getName(), pendingFine.amount, "Штраф от " + officer.getName() + ": " + reason); factionManager.saveFactionsConfig(); } setFineCooldowns(officerUuid, pendingFine.targetUuid); Map<String, String> fineInfo = Map.of("highlight", configManager.getHighlightColor(), "player", target.getName(), "amount", moneyFormat.format(pendingFine.amount), "currency", economy.currencyNamePlural(), "reason", reason); Utils.msg(officer, configManager.getLangMessage("fine-success-officer", fineInfo)); Utils.msg(officer, configManager.getLangMessage("fine-success-officer-destination", Map.of("destination", depositTargetName))); Map<String, String> fineInfoTarget = Map.of("highlight", configManager.getHighlightColor(), "officer", officer.getName(), "amount", moneyFormat.format(pendingFine.amount), "currency", economy.currencyNamePlural(), "reason", reason); Utils.msg(target, configManager.getLangMessage("fine-success-target", fineInfoTarget)); Utils.msg(target, configManager.getLangMessage("fine-success-target-balance", Map.of("highlight", configManager.getHighlightColor(), "amount", moneyFormat.format(economy.getBalance(target))))); if (configManager.logFines()) plugin.logInfo(configManager.getFineLogFormat().replace("{officer}", officer.getName()).replace("{target}", target.getName()).replace("{amount}", moneyFormat.format(pendingFine.amount)).replace("{reason}", reason)); } }
-    // --- Методы управления кулдаунами штрафов ---
-    private boolean isOnFineGlobalCooldown(UUID officerUuid) { Instant end = fineGlobalCooldowns.get(officerUuid); return end != null && Instant.now().isBefore(end); }
-    private long getFineGlobalCooldownSecondsLeft(UUID officerUuid) { Instant end = fineGlobalCooldowns.get(officerUuid); if (end == null) return 0; Instant now = Instant.now(); return now.isBefore(end) ? ChronoUnit.SECONDS.between(now, end) + 1 : 0; }
-    private boolean isOnFineTargetCooldown(UUID officerUuid, UUID targetUuid) { Map<UUID, Instant> map = fineTargetCooldowns.get(officerUuid); if (map == null) return false; Instant end = map.get(targetUuid); return end != null && Instant.now().isBefore(end); }
-    private String getFineTargetCooldownTimeLeft(UUID officerUuid, UUID targetUuid) { Map<UUID, Instant> map = fineTargetCooldowns.get(officerUuid); if (map == null) return "0 сек."; Instant end = map.get(targetUuid); if (end == null) return "0 сек."; Instant now = Instant.now(); if (now.isBefore(end)) { long min = ChronoUnit.MINUTES.between(now, end); long sec = ChronoUnit.SECONDS.between(now, end) % 60; return (min > 0 ? min + " мин. " : "") + (sec + 1) + " сек."; } return "0 сек."; }
-    private void setFineCooldowns(UUID officerUuid, UUID targetUuid) { Instant now = Instant.now(); long globalCd = configManager.getFineGlobalCooldownSeconds(); long targetCd = configManager.getFineTargetCooldownMinutes(); fineGlobalCooldowns.put(officerUuid, now.plusSeconds(globalCd)); fineTargetCooldowns.computeIfAbsent(officerUuid, k -> new HashMap<>()).put(targetUuid, now.plus(targetCd, ChronoUnit.MINUTES)); }
+        // Используем getOfflinePlayer, чтобы можно было кикнуть оффлайн? ТЗ говорит "Исключить игрока" без уточнения
+        // Пока сделаем для онлайн
+        Player target = Bukkit.getPlayerExact(args[0]);
+        if (target == null || !target.isOnline()) { // Строго онлайн
+            player.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+            return;
+        }
+
+        // Проверка, в той ли фракции цель
+        String targetFactionId = playerManager.getPlayerFactionId(target);
+        if (!faction.getId().equals(targetFactionId)) {
+            String msg = configManager.getMessage("kick.target_not_in_your_faction", "&c{target_name} is not in your faction.");
+            player.sendMessage(Utils.color(msg.replace("{target_name}", target.getName())));
+            return;
+        }
+
+        // Проверка рангов (нельзя кикнуть того, кто выше или равен по рангу, если не админ)
+        FactionRank kickerRank = playerManager.getPlayerRank(player);
+        FactionRank targetRank = playerManager.getPlayerRank(target);
+        if (!player.hasPermission("hfactions.admin.*")) { // Админы могут кикать любого
+            if (kickerRank == null || targetRank == null || kickerRank.getInternalId() <= targetRank.getInternalId()) {
+                player.sendMessage(configManager.getMessage("kick.rank_too_low", "&cYou cannot kick someone with an equal or higher rank."));
+                return;
+            }
+        }
+
+        // Кикаем
+        playerManager.kickPlayer(player, target); // Логика и сообщения там
+    }
 
 
-    // --- Вспомогательные методы ---
-    private boolean checkPermissionAndExecute(CommandSender sender, String permission, Runnable action) { plugin.logInfo("[DEBUG] Checking perm '" + permission + "' for " + sender.getName()); if (!sender.hasPermission(permission)) { plugin.logWarning("[DEBUG] Permission DENIED for " + sender.getName() + " (" + permission + ")"); return noPermission(sender, permission); } plugin.logInfo("[DEBUG] Permission GRANTED for " + permission + ". Running action."); try { action.run(); } catch (Exception e) { Utils.msg(sender, configManager.getLangMessage("internal-error")); plugin.logError("Error executing " + permission); e.printStackTrace(); } return true;}
-    private boolean hasRankPermission(Player player, Faction faction, @Nullable Integer rankId, String baseNode) { if (player == null || faction == null || rankId == null) return false; if (player.hasPermission(baseNode)) return true; if (player.hasPermission(baseNode + "." + faction.getId())) return true; FactionRank rank = faction.getRank(rankId); if (rank != null && rank.getPermissions() != null) { if (rank.getPermissions().contains(baseNode) || rank.getPermissions().contains(baseNode + "." + faction.getId())) return true; } return false; }
-    private String parseQuotedString(String[] args, int start) { if(args.length<=start||!args[start].startsWith("\""))return null; StringBuilder sb=new StringBuilder(); for(int i=start;i<args.length;i++){ String a=args[i]; if(i==start){if(a.length()>1&&a.endsWith("\""))return a.substring(1,a.length()-1);sb.append(a.substring(1));}else{if(a.endsWith("\"")){sb.append(" ").append(a.substring(0,a.length()-1));return sb.toString();}else{sb.append(" ").append(a);}}} return null; }
-    private int findQuotedStringEndIndex(String[] args, int start) { if(args.length<=start||!args[start].startsWith("\""))return -1; for(int i=start;i<args.length;i++)if(args[i].endsWith("\""))return i+1; return -1; }
-    private boolean needsPlayer(String sub) { return Arrays.asList("invite","leave","kick","promote","demote","setrank","manageranks","balance","bal","deposit","dep","withdraw","wd","chat","c","warehouse","wh","fine","territory","adminmode").contains(sub); }
-    private boolean needsEconomy(String sub) { return Arrays.asList("balance","bal","deposit","dep","withdraw","wd","fine").contains(sub); }
-    // Исправленные методы сообщений об ошибках
-    private boolean noPermission(CommandSender s) { Utils.msg(s, configManager.getLangMessage("no-permission", Map.of("permission","Недостаточно прав"))); return true; }
-    private boolean noPermission(CommandSender s, String permission) { Utils.msg(s, configManager.getLangMessage("no-permission", Map.of("permission", permission), "&cУ вас нет прав ({permission}).")); return true; }
-    private boolean requiresPlayer(CommandSender s) { Utils.msg(s, configManager.getLangMessage("player-only-command", "&cТолько для игроков.")); return true; }
-    private boolean requiresPlayerOrArg(CommandSender s) { Utils.msg(s, configManager.getLangMessage("requires-player-or-arg", "&cУкажите ник или выполните как игрок.")); return true; }
-    private boolean usage(CommandSender s, String u) { Utils.msg(s, configManager.getLangMessage("usage", "&cИспользование: /{usage}").replace("{usage}", u)); return true; }
-    private boolean isLeader(CommandSender s) { if(!(s instanceof Player p))return false; return Integer.valueOf(11).equals(playerManager.getPlayerRankId(p.getUniqueId())); }
-    private boolean noPermissionTerritory(CommandSender s) { plugin.logInfo("[DEBUG][Territory] Permission denied for " + s.getName()); Utils.msg(s, configManager.getLangMessage("territory-no-perms", "&cНет прав на команды территории.")); return true; }
-    private boolean requiresPlayerTerritory(CommandSender s) { plugin.logInfo("[DEBUG][Territory] Command requires player."); Utils.msg(s, configManager.getLangMessage("territory-player-only", "&cКоманды территории только для игроков.")); return true; }
-    private record EffectiveFactionData(boolean isInFaction, @Nullable Faction faction, @Nullable Integer rankId) {}
-    private EffectiveFactionData getEffectiveFactionData(Player player) { UUID uuid = player.getUniqueId(); String adminModeFactionId = playerManager.getAdminModeFactionId(uuid); if (adminModeFactionId != null) { Faction adminFaction = factionManager.getFaction(adminModeFactionId); if (adminFaction != null) return new EffectiveFactionData(true, adminFaction, 11); else { playerManager.toggleAdminMode(player, null); Utils.msg(player, configManager.getLangMessage("adminmode-error-no-faction")); return new EffectiveFactionData(false, null, null); } } else { Faction faction = playerManager.getPlayerFaction(uuid); Integer rankId = (faction != null) ? playerManager.getPlayerRankId(uuid) : null; return new EffectiveFactionData(faction != null, faction, rankId); } }
+    private void handlePromote(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.promote
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} promote <player_name>").replace("{label}", label));
+            return;
+        }
+
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        // Проверка прав
+        if (!player.hasPermission("hfactions.faction.promote")) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.promote")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
+
+        Player target = Bukkit.getPlayerExact(args[0]);
+        if (target == null || !target.isOnline()) {
+            player.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+            return;
+        }
+
+        // Проверка, в той ли фракции цель
+        String targetFactionId = playerManager.getPlayerFactionId(target);
+        if (!faction.getId().equals(targetFactionId)) {
+            String msg = configManager.getMessage("promote.target_not_in_your_faction", "&c{target_name} is not in your faction.");
+            player.sendMessage(Utils.color(msg.replace("{target_name}", target.getName())));
+            return;
+        }
+
+        // Проверка рангов (нельзя повысить того, кто выше или равен, нельзя повысить лидера)
+        FactionRank promoterRank = playerManager.getPlayerRank(player);
+        FactionRank targetRank = playerManager.getPlayerRank(target);
+        if (targetRank == null) { // На всякий случай
+            player.sendMessage(ChatColor.RED + "Target player has an invalid rank.");
+            return;
+        }
+        if (!player.hasPermission("hfactions.admin.*")) { // Админы могут повышать любого (кроме лидера)
+            if (promoterRank == null || promoterRank.getInternalId() <= targetRank.getInternalId()) {
+                player.sendMessage(configManager.getMessage("promote.rank_too_low", "&cYou cannot promote someone with an equal or higher rank."));
+                return;
+            }
+        }
+        // Проверяем, не пытаемся ли повысить лидера (ранг 11)
+        if (targetRank.getInternalId() >= 11) { // Используем >= на случай кастомных рангов выше 11
+            player.sendMessage(configManager.getMessage("promote.cant_promote_leader", "&cYou cannot promote the highest rank."));
+            return;
+        }
+
+        // Повышаем
+        playerManager.promotePlayer(player, target);
+    }
+
+    private void handleDemote(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.demote
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} demote <player_name>").replace("{label}", label));
+            return;
+        }
+
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        // Проверка прав
+        if (!player.hasPermission("hfactions.faction.demote")) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.demote")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
+
+        Player target = Bukkit.getPlayerExact(args[0]);
+        if (target == null || !target.isOnline()) {
+            player.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+            return;
+        }
+
+        // Проверка, в той ли фракции цель
+        String targetFactionId = playerManager.getPlayerFactionId(target);
+        if (!faction.getId().equals(targetFactionId)) {
+            String msg = configManager.getMessage("demote.target_not_in_your_faction", "&c{target_name} is not in your faction.");
+            player.sendMessage(Utils.color(msg.replace("{target_name}", target.getName())));
+            return;
+        }
+
+        // Проверка рангов (нельзя понизить того, кто выше или равен, нельзя понизить ниже 1 ранга)
+        FactionRank demoterRank = playerManager.getPlayerRank(player);
+        FactionRank targetRank = playerManager.getPlayerRank(target);
+        if (targetRank == null) {
+            player.sendMessage(ChatColor.RED + "Target player has an invalid rank.");
+            return;
+        }
+        if (!player.hasPermission("hfactions.admin.*")) { // Админы могут понижать
+            if (demoterRank == null || demoterRank.getInternalId() <= targetRank.getInternalId()) {
+                player.sendMessage(configManager.getMessage("demote.rank_too_low", "&cYou cannot demote someone with an equal or higher rank."));
+                return;
+            }
+        }
+        // Проверяем, не пытаемся ли понизить ниже 1 ранга
+        if (targetRank.getInternalId() <= 1) {
+            player.sendMessage(configManager.getMessage("demote.cant_demote_lowest", "&cYou cannot demote the lowest rank."));
+            return;
+        }
+
+        // Понижаем
+        playerManager.demotePlayer(player, target);
+    }
 
 
-    // --- Tab Completer ---
-    @Nullable
+    private void handleSetRank(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.setrank
+        if (args.length < 2) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} setrank <player_name> <rank_id>").replace("{label}", label));
+            return;
+        }
+
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        // Проверка прав
+        if (!player.hasPermission("hfactions.faction.setrank")) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.setrank")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
+
+        Player target = Bukkit.getPlayerExact(args[0]);
+        if (target == null || !target.isOnline()) {
+            player.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+            return;
+        }
+
+        // Проверка, в той ли фракции цель
+        String targetFactionId = playerManager.getPlayerFactionId(target);
+        if (!faction.getId().equals(targetFactionId)) {
+            String msg = configManager.getMessage("setrank.target_not_in_your_faction", "&c{target_name} is not in your faction.");
+            player.sendMessage(Utils.color(msg.replace("{target_name}", target.getName())));
+            return;
+        }
+
+        int rankId;
+        try {
+            rankId = Integer.parseInt(args[1]);
+            if (faction.getRank(rankId) == null) { // Проверяем существование ранга
+                player.sendMessage(configManager.getMessage("faction.rank_not_exist", "&cRank ID {rank_id} does not exist.").replace("{rank_id}", args[1]));
+                return;
+            }
+        } catch (NumberFormatException e) {
+            player.sendMessage(configManager.getMessage("setrank.invalid_rank_id", "&cInvalid rank ID specified. Must be a number."));
+            return;
+        }
+
+        // Проверка ранга установщика (нельзя ставить ранг выше или равный своему, если не админ)
+        FactionRank setterRank = playerManager.getPlayerRank(player);
+        if (!player.hasPermission("hfactions.admin.*")) {
+            if (setterRank == null || setterRank.getInternalId() < rankId ) { // Строго МЕНЬШЕ чем у устанавливающего
+                player.sendMessage(configManager.getMessage("setrank.rank_too_low", "&cYou cannot set a rank equal to or higher than your own."));
+                return;
+            }
+            // Особый случай - лидер (ранг 11) может ставить любой ранг ниже себя
+            if(setterRank.getInternalId() == 11 && rankId == 11){
+                player.sendMessage(configManager.getMessage("setrank.cant_set_leader_to_leader", "&cYou cannot set the leader rank to the leader again."));
+                return;
+            }
+        }
+
+
+        // Устанавливаем ранг
+        playerManager.setPlayerRank(player, target, rankId);
+    }
+
+
+    private void handleManageRanks(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.faction.manage_ranks
+        Faction faction = playerManager.getPlayerFaction(player);
+        if (faction == null) {
+            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            return;
+        }
+
+        // Проверка прав
+        if (!player.hasPermission("hfactions.faction.manage_ranks")) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.faction.manage_ranks")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
+
+        if (guiManager == null) {
+            player.sendMessage(ChatColor.RED + "Internal error: GuiManager not available.");
+            return;
+        }
+        guiManager.openRanksGUI(player); // Открываем GUI
+    }
+
+    private void handleFine(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.pd.fine (или другое, настроить в factions.yml)
+        if (args.length < 3) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} fine <player_name> <amount> <reason...>").replace("{label}", label));
+            return;
+        }
+
+        // Проверка, находится ли игрок в подходящей фракции (например, PD) и имеет ли право
+        Faction playerFaction = playerManager.getPlayerFaction(player);
+        // TODO: Сделать проверку фракции более гибкой (например, через тип STATE?)
+        if (playerFaction == null /* || !playerFaction.getId().equalsIgnoreCase("pd") */ ) {
+            player.sendMessage(configManager.getMessage("fine.not_in_pd", "&cOnly members of authorized factions can issue fines.")); // Сообщение может быть общим
+            return;
+        }
+
+        // Проверка права из ранга
+        boolean hasFinePerm = player.hasPermission("hfactions.pd.fine"); // Пример права
+        if (!hasFinePerm) {
+            FactionRank rank = playerManager.getPlayerRank(player);
+            if (rank == null || !rank.getPermissions().contains("hfactions.pd.fine")) {
+                player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+                return;
+            }
+        }
+
+
+        if (vaultIntegration == null) {
+            player.sendMessage(configManager.getMessage("economy.vault_missing", "&cEconomy features are disabled (Vault not found)."));
+            return;
+        }
+
+
+        Player target = Bukkit.getPlayerExact(args[0]);
+        if (target == null || !target.isOnline()) {
+            player.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+            return;
+        }
+
+        if (target.getUniqueId().equals(player.getUniqueId())) {
+            player.sendMessage(configManager.getMessage("fine.cant_fine_self", "&cYou cannot fine yourself."));
+            return;
+        }
+
+        double amount;
+        try {
+            amount = Double.parseDouble(args[1]);
+            // Проверка лимитов штрафа из конфига
+            double minFine = configManager.getConfig().getDouble("mechanics.fining.min_amount", 10.0);
+            double maxFine = configManager.getConfig().getDouble("mechanics.fining.max_amount", 5000.0);
+            if (amount < minFine || amount > maxFine) {
+                String msg = configManager.getMessage("fine.amount_limit", "&cFine amount must be between {min} and {max}.");
+                player.sendMessage(Utils.color(msg.replace("{min}", vaultIntegration.format(minFine)).replace("{max}", vaultIntegration.format(maxFine))));
+                return;
+            }
+        } catch (NumberFormatException e) {
+            player.sendMessage(configManager.getMessage("economy.invalid_amount_number", "&cInvalid amount specified."));
+            return;
+        }
+
+        String reason = String.join(" ", Arrays.copyOfRange(args, 2, args.length));
+
+        // Снимаем деньги у цели
+        if (vaultIntegration.withdraw(target.getUniqueId(), amount)) {
+            // Начисляем куда? Во фракцию офицера? В казну государства? На счет офицера?
+            // Пример: начисление во фракцию офицера
+            if (factionManager.depositToFaction(playerFaction.getId(), amount)) {
+                String formattedAmount = vaultIntegration.format(amount);
+                // Сообщение оштрафованному
+                String targetMsg = configManager.getMessage("fine.target_fined", "&cYou have been fined {amount} by Officer {officer} for: {reason}");
+                target.sendMessage(Utils.color(targetMsg
+                        .replace("{amount}", formattedAmount)
+                        .replace("{officer}", player.getName())
+                        .replace("{reason}", reason)));
+                // Сообщение офицеру
+                String officerMsg = configManager.getMessage("fine.officer_success", "&aSuccessfully fined {target} for {amount}. Reason: {reason}");
+                player.sendMessage(Utils.color(officerMsg
+                        .replace("{target}", target.getName())
+                        .replace("{amount}", formattedAmount)
+                        .replace("{reason}", reason)));
+                // Логирование во фракцию
+                String logMsg = configManager.getMessage("fine.log", "&eOfficer {officer} fined {target} for {amount}. Reason: {reason}");
+                playerManager.broadcastToFaction(playerFaction.getId(), Utils.color(logMsg
+                        .replace("{officer}", player.getName())
+                        .replace("{target}", target.getName())
+                        .replace("{amount}", formattedAmount)
+                        .replace("{reason}", reason)));
+            } else {
+                // Ошибка начисления во фракцию - возвращаем деньги цели
+                vaultIntegration.deposit(target.getUniqueId(), amount);
+                player.sendMessage(configManager.getMessage("fine.error_faction_deposit", "&cError depositing fine into faction treasury. Fine cancelled."));
+            }
+        } else {
+            // Недостаточно средств у цели
+            String msg = configManager.getMessage("fine.target_no_money", "&c{target} does not have enough money to pay the fine ({amount}).");
+            player.sendMessage(Utils.color(msg
+                    .replace("{target}", target.getName())
+                    .replace("{amount}", vaultIntegration.format(amount))));
+        }
+    }
+
+    // --- Территории ---
+    private void handleTerritory(CommandSender sender, String[] args, String label) {
+        if (dynmapManager == null) {
+            sender.sendMessage(configManager.getMessage("territory.dynmap_disabled", "&cTerritory management is disabled (Dynmap not found or integration failed)."));
+            return;
+        }
+
+        if (args.length == 0) {
+            handleTerritoryHelp(sender, label); // Показываем помощь, если нет подкоманды
+            return;
+        }
+
+        String territorySubCommand = args[0].toLowerCase();
+        String[] territoryArgs = Arrays.copyOfRange(args, 1, args.length);
+
+        // Проверка общих прав на использование /hf territory ?
+        // if (!sender.hasPermission("hfactions.territory.base")) { ... }
+
+        switch (territorySubCommand) {
+            case "list":
+                handleTerritoryList(sender, territoryArgs);
+                break;
+            case "define": // Только для админов или лидеров с правом manage.own
+                handleTerritoryDefine(sender, territoryArgs, label); // Имя территории не нужно в define
+                break;
+            case "corner":
+                handleTerritoryCorner(sender);
+                break;
+            case "clear":
+                handleTerritoryClear(sender);
+                break;
+            case "claim":
+                handleTerritoryClaim(sender, territoryArgs, label);
+                break;
+            case "delete":
+                handleTerritoryDelete(sender, territoryArgs, label);
+                break;
+            case "map": // Обновление карты - админ
+                handleTerritoryMap(sender);
+                break;
+            case "help":
+                handleTerritoryHelp(sender, label);
+                break;
+            default:
+                sender.sendMessage(configManager.getMessage("command.unknown", "&cUnknown command: /" + label + " territory " + territorySubCommand));
+                handleTerritoryHelp(sender, label);
+                break;
+        }
+    }
+
+    private void handleTerritoryList(CommandSender sender, String[] args) {
+        // Право: hfactions.territory.list или hfactions.admin.territory
+        if (!sender.hasPermission("hfactions.territory.list") && !sender.hasPermission("hfactions.admin.territory")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+        sender.sendMessage(Utils.color(configManager.getMessage("territory.list.header", "&6--- Faction Territories ---")));
+        Map<String, DynmapManager.TerritoryInfo> territories = dynmapManager.getAllTerritories(); // Получаем мапу Имя -> Инфо
+
+        if (territories.isEmpty()) {
+            sender.sendMessage(Utils.color(configManager.getMessage("territory.list.no_territories", "&7No territories have been claimed.")));
+            return;
+        }
+
+        String filterFactionId = null;
+        if (args.length > 0) {
+            filterFactionId = args[0].toLowerCase();
+            sender.sendMessage(Utils.color("&eFiltering territories for faction: " + filterFactionId));
+        }
+
+        String format = configManager.getMessage("territory.list.entry", "&e{name} &7(Owner: {owner_name} [{owner_id}], World: {world})");
+        final String finalFilterFactionId = filterFactionId; // Для лямбды
+
+        territories.values().stream()
+                .filter(info -> finalFilterFactionId == null || info.factionId.equalsIgnoreCase(finalFilterFactionId)) // Фильтруем по ID фракции, если указан
+                .sorted(Comparator.comparing(info -> info.territoryName, String.CASE_INSENSITIVE_ORDER)) // Сортируем по имени территории
+                .forEach(info -> {
+                    Faction owner = factionManager.getFaction(info.factionId);
+                    String ownerName = owner != null ? owner.getName() : "Unknown";
+                    sender.sendMessage(Utils.color(format
+                            .replace("{name}", info.territoryName)
+                            .replace("{owner_name}", ownerName)
+                            .replace("{owner_id}", info.factionId)
+                            .replace("{world}", info.worldName)
+                    ));
+                });
+    }
+
+    private void handleTerritoryDefine(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.territory.manage.own (лидер) ИЛИ hfactions.admin.territory
+        boolean isAdmin = player.hasPermission("hfactions.admin.territory");
+        boolean isLeaderWithPerm = false;
+        if (!isAdmin) {
+            Faction faction = playerManager.getPlayerFaction(player);
+            if (faction != null) {
+                FactionRank rank = playerManager.getPlayerRank(player);
+                // Проверяем, что это лидер (ранг 11) и у него есть право manage.own
+                if (rank != null && rank.getInternalId() == 11 && rank.getPermissions().contains("hfactions.territory.manage.own")) {
+                    isLeaderWithPerm = true;
+                }
+            }
+        }
+
+        if (!isAdmin && !isLeaderWithPerm) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cOnly Admins or Faction Leaders with permission can define territories."));
+            return;
+        }
+
+        dynmapManager.startDefining(player); // Сообщение внутри метода
+    }
+
+    private void handleTerritoryCorner(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право проверяется в startDefining (т.е. если начал, то может добавлять углы)
+        dynmapManager.addCorner(player); // Сообщение внутри метода
+    }
+
+    private void handleTerritoryClear(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право проверяется в startDefining
+        dynmapManager.clearCorners(player); // Сообщение внутри метода
+    }
+
+    private void handleTerritoryClaim(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.territory.manage.own (лидер) ИЛИ hfactions.admin.territory
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} territory claim <territory_name> [faction_id_if_admin]").replace("{label}", label));
+            return;
+        }
+
+        String territoryName = args[0];
+        String factionIdToClaim = null;
+
+        boolean isAdmin = player.hasPermission("hfactions.admin.territory");
+        boolean isLeaderWithPerm = false;
+        Faction playerFaction = playerManager.getPlayerFaction(player);
+
+        if (isAdmin) {
+            // Админ может указать ID фракции вторым аргументом
+            if (args.length >= 2) {
+                factionIdToClaim = args[1].toLowerCase();
+                if (factionManager.getFaction(factionIdToClaim) == null) {
+                    sender.sendMessage(configManager.getMessage("faction.not_found", "&cFaction with ID '{id}' not found.").replace("{id}", factionIdToClaim));
+                    return;
+                }
+            } else {
+                // Если админ не указал ID, используем его фракцию (если есть) или требуем указать
+                if (playerFaction != null) {
+                    factionIdToClaim = playerFaction.getId();
+                } else {
+                    sender.sendMessage(configManager.getMessage("command.usage", "&cUsage for Admin: /{label} territory claim <territory_name> <faction_id>").replace("{label}", label));
+                    return;
+                }
+            }
+        } else {
+            // Лидер может клеймить только для СВОЕЙ фракции
+            if (playerFaction == null) {
+                sender.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+                return;
+            }
+            FactionRank rank = playerManager.getPlayerRank(player);
+            // Проверяем, что это лидер (ранг 11) и у него есть право manage.own
+            if (rank != null && rank.getInternalId() == 11 && rank.getPermissions().contains("hfactions.territory.manage.own")) {
+                isLeaderWithPerm = true;
+                factionIdToClaim = playerFaction.getId();
+            }
+        }
+
+
+        if (!isAdmin && !isLeaderWithPerm) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cOnly Admins or Faction Leaders with permission can claim territories."));
+            return;
+        }
+
+        if (factionIdToClaim == null) { // Должно быть установлено выше
+            player.sendMessage(ChatColor.RED + "Internal error: Could not determine faction ID for claim.");
+            return;
+        }
+
+        dynmapManager.claimTerritory(player, territoryName, factionIdToClaim); // Сообщения внутри
+    }
+
+    private void handleTerritoryDelete(CommandSender sender, String[] args, String label) {
+        // Право: hfactions.territory.manage.own (лидер СВОЕЙ зоны) ИЛИ hfactions.admin.territory (любую зону)
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} territory delete <territory_name>").replace("{label}", label));
+            return;
+        }
+        String territoryName = args[0];
+
+        DynmapManager.TerritoryInfo territoryInfo = dynmapManager.getTerritoryInfo(territoryName);
+        if (territoryInfo == null) {
+            sender.sendMessage(configManager.getMessage("territory.not_found", "&cTerritory with name '{name}' not found.").replace("{name}", territoryName));
+            return;
+        }
+
+        boolean canDelete = false;
+        if (sender instanceof Player player) {
+            boolean isAdmin = player.hasPermission("hfactions.admin.territory");
+            boolean isOwnerLeaderWithPerm = false;
+            String playerFactionId = playerManager.getPlayerFactionId(player);
+
+            // Проверяем, является ли игрок лидером фракции-владельца территории
+            if (territoryInfo.factionId.equals(playerFactionId)) {
+                FactionRank rank = playerManager.getPlayerRank(player);
+                if (rank != null && rank.getInternalId() == 11 && rank.getPermissions().contains("hfactions.territory.manage.own")) {
+                    isOwnerLeaderWithPerm = true;
+                }
+            }
+
+            if (isAdmin || isOwnerLeaderWithPerm) {
+                canDelete = true;
+            }
+        } else {
+            // Консоль может удалять? Допустим, да (эквивалент админа)
+            canDelete = true;
+        }
+
+
+        if (!canDelete) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission to delete this territory."));
+            return;
+        }
+
+        if (dynmapManager.deleteTerritory(territoryName)) {
+            sender.sendMessage(configManager.getMessage("territory.deleted", "&aTerritory '{name}' deleted successfully.").replace("{name}", territoryName));
+        } else {
+            // Сообщение об ошибке уже было отправлено из deleteTerritory
+        }
+    }
+
+    private void handleTerritoryMap(CommandSender sender) {
+        // Право: hfactions.admin.territory
+        if (!sender.hasPermission("hfactions.admin.territory")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+        // Команда Dynmap для полного рендера карты (если нужна)
+        // Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "dynmap fullrender");
+        // Или просто пауза/возобновление для обновления маркеров (быстрее)
+        sender.sendMessage(Utils.color("&eAttempting to trigger Dynmap update... (Use Dynmap commands for full control)"));
+        try {
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "dynmap pause all");
+            // Небольшая задержка перед возобновлением
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "dynmap resume all");
+                sender.sendMessage(Utils.color("&aDynmap update triggered. Map should refresh soon."));
+            }, 40L); // 2 секунды задержки
+        } catch (Exception e) {
+            sender.sendMessage(ChatColor.RED + "Failed to execute Dynmap commands: " + e.getMessage());
+        }
+    }
+
+
+    private void handleTerritoryHelp(CommandSender sender, String label) {
+        // Право: hfactions.territory.help или любое другое право на территории
+        if (!sender.hasPermission("hfactions.territory.help") && !sender.hasPermission("hfactions.territory.list") && !sender.hasPermission("hfactions.territory.manage.own") && !sender.hasPermission("hfactions.admin.territory")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for territory commands."));
+            return;
+        }
+        String prefix = "/" + label + " territory ";
+        sender.sendMessage(Utils.color("&6--- Territory Commands ---"));
+        sender.sendMessage(Utils.color("&e" + prefix + "list [faction_id] &7- List claimed territories"));
+        // Показываем команды управления только если есть права
+        if (sender.hasPermission("hfactions.territory.manage.own") || sender.hasPermission("hfactions.admin.territory")) {
+            sender.sendMessage(Utils.color("&e" + prefix + "define &7- Start defining corners for a new territory"));
+            sender.sendMessage(Utils.color("&e" + prefix + "corner &7- Add a corner at your current location"));
+            sender.sendMessage(Utils.color("&e" + prefix + "clear &7- Clear currently defined corners"));
+            sender.sendMessage(Utils.color("&e" + prefix + "claim <name> [faction_id] &7- Claim the defined area"));
+            sender.sendMessage(Utils.color("&e" + prefix + "delete <name> &7- Delete a claimed territory"));
+        }
+        if (sender.hasPermission("hfactions.admin.territory")) {
+            sender.sendMessage(Utils.color("&c" + prefix + "map &7- Trigger a Dynmap map update"));
+        }
+        sender.sendMessage(Utils.color("&e" + prefix + "help &7- Show this help message"));
+    }
+
+    // --- Админка ---
+
+    private void handleReload(CommandSender sender) {
+        // Право: hfactions.admin.reload
+        if (!sender.hasPermission("hfactions.admin.reload")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+        sender.sendMessage(Utils.color(configManager.getMessage("reload.start", "&eReloading HFactions configuration...")));
+        long startTime = System.currentTimeMillis();
+
+        // Сохраняем измененные фракции перед перезагрузкой? Нет, reload должен сбрасывать несохраненное.
+        // factionManager.saveModifiedFactions();
+
+        // Перезагружаем конфиги
+        if (configManager != null) configManager.reloadConfigs();
+        // Перезагружаем настройки менеджеров
+        if (cuffManager != null) cuffManager.loadConfigSettings();
+        if (itemManager != null) itemManager.loadAndCacheItems();
+        // Перезагружаем данные из файлов (фракции, рецепты, территории)
+        if (factionManager != null) factionManager.reloadFactions();
+        if (plugin.getCraftingManager() != null) plugin.getCraftingManager().loadRecipes(); // Перезагружаем рецепты
+        if (dynmapManager != null) dynmapManager.loadTerritories(); // Перезагружаем территории
+
+        long endTime = System.currentTimeMillis();
+        sender.sendMessage(Utils.color(configManager.getMessage("reload.success", "&aHFactions configuration reloaded successfully! ({time}ms)").replace("{time}", String.valueOf(endTime - startTime))));
+        sender.sendMessage(Utils.color(configManager.getMessage("reload.warning", "&cWarning: Player data is NOT reloaded from DB. Use server restart for full reload.")));
+    }
+
+
+    private void handleCreate(CommandSender sender, String[] args, String label) {
+        // Право: hfactions.admin.create
+        if (!sender.hasPermission("hfactions.admin.create")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+        // /hf create <id> "<Назв>" <тип> [баланс] [размер_склада]
+        if (args.length < 3) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} create <id> \"<Name>\" <STATE|CRIMINAL|OTHER> [balance] [warehouse_size]").replace("{label}", label));
+            return;
+        }
+
+        String id = args[0].toLowerCase();
+        // Парсинг имени в кавычках
+        String name = parseQuotedString(args, 1);
+        if (name == null) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} create <id> \"<Name>\" <TYPE>... Name must be in quotes if it contains spaces.").replace("{label}", label));
+            return;
+        }
+        int argsUsedForName = countArgsForQuotedString(args, 1);
+        int typeArgIndex = 1 + argsUsedForName;
+
+        if (args.length <= typeArgIndex) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} create <id> \"<Name>\" <STATE|CRIMINAL|OTHER> ...").replace("{label}", label));
+            return;
+        }
+
+        FactionType type;
+        try {
+            type = FactionType.valueOf(args[typeArgIndex].toUpperCase());
+        } catch (IllegalArgumentException e) {
+            sender.sendMessage(configManager.getMessage("create.invalid_type", "&cInvalid faction type: {type}. Use STATE, CRIMINAL, or OTHER.").replace("{type}", args[typeArgIndex]));
+            return;
+        }
+
+        double balance = 0.0;
+        int balanceArgIndex = typeArgIndex + 1;
+        if (args.length > balanceArgIndex) {
+            try {
+                balance = Double.parseDouble(args[balanceArgIndex]);
+            } catch (NumberFormatException e) {
+                sender.sendMessage(configManager.getMessage("economy.invalid_amount_number", "&cInvalid balance specified. Must be a number."));
+                return;
+            }
+        }
+
+        int warehouseSize = 54; // Размер по умолчанию
+        int sizeArgIndex = balanceArgIndex + 1;
+        if (args.length > sizeArgIndex) {
+            try {
+                warehouseSize = Integer.parseInt(args[sizeArgIndex]);
+                if (warehouseSize <= 0 || warehouseSize % 9 != 0) {
+                    sender.sendMessage(configManager.getMessage("create.invalid_size", "&cWarehouse size must be a positive multiple of 9."));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                sender.sendMessage(configManager.getMessage("create.invalid_size_format", "&cInvalid warehouse size specified. Must be a number."));
+                return;
+            }
+        }
+
+
+        // Проверка на существующую фракцию
+        if (factionManager.getFaction(id) != null) {
+            sender.sendMessage(configManager.getMessage("create.already_exists", "&cFaction with ID '{id}' already exists.").replace("{id}", id));
+            return;
+        }
+
+        // Создаем фракцию
+        // TODO: Получить дефолтный цвет и префикс из конфига?
+        String defaultColor = "#FFFFFF";
+        String defaultPrefix = "[" + id.toUpperCase() + "]";
+        factionManager.createFaction(id, name, type, defaultColor, defaultPrefix, balance, warehouseSize);
+        sender.sendMessage(configManager.getMessage("create.success", "&aFaction '{name}' (ID: {id}) created successfully!").replace("{name}", name).replace("{id}", id));
+
+    }
+    // Вспомогательные методы для парсинга имени в кавычках
+    private String parseQuotedString(String[] args, int startIndex) {
+        if (startIndex >= args.length) return null;
+        if (args[startIndex].startsWith("\"")) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(args[startIndex].substring(1)); // Убираем первую кавычку
+            for (int i = startIndex + 1; i < args.length; i++) {
+                sb.append(" ");
+                if (args[i].endsWith("\"")) {
+                    sb.append(args[i], 0, args[i].length() - 1); // Добавляем без последней кавычки
+                    return sb.toString();
+                } else {
+                    sb.append(args[i]);
+                }
+            }
+            return null; // Не нашли закрывающую кавычку
+        } else {
+            // Если нет кавычек, считаем, что имя - одно слово
+            if(args[startIndex].contains(" ")) return null; // Не позволяем пробелы без кавычек
+            return args[startIndex];
+        }
+    }
+    private int countArgsForQuotedString(String[] args, int startIndex) {
+        if (startIndex >= args.length) return 0;
+        if (args[startIndex].startsWith("\"")) {
+            for (int i = startIndex; i < args.length; i++) {
+                if (args[i].endsWith("\"")) {
+                    return (i - startIndex) + 1;
+                }
+            }
+            return args.length - startIndex; // Не нашли закрывающую кавычку - считаем все до конца
+        } else {
+            return 1; // Одно слово
+        }
+    }
+
+
+    private void handleDelete(CommandSender sender, String[] args, String label) {
+        // Право: hfactions.admin.delete
+        if (!sender.hasPermission("hfactions.admin.delete")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} delete <faction_id>").replace("{label}", label));
+            return;
+        }
+        String id = args[0].toLowerCase();
+
+        if (factionManager.getFaction(id) == null) {
+            sender.sendMessage(configManager.getMessage("faction.not_found", "&cFaction with ID '{id}' not found.").replace("{id}", id));
+            return;
+        }
+
+        if (factionManager.deleteFaction(id)) {
+            sender.sendMessage(configManager.getMessage("delete.success", "&aFaction '{id}' deleted successfully.").replace("{id}", id));
+        } else {
+            sender.sendMessage(configManager.getMessage("delete.error", "&cFailed to delete faction '{id}'.").replace("{id}", id));
+        }
+    }
+
+
+    private void handleSetBalance(CommandSender sender, String[] args, String label) {
+        // Право: hfactions.admin.setbalance
+        if (!sender.hasPermission("hfactions.admin.setbalance")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} setbalance <faction_id> <amount>").replace("{label}", label));
+            return;
+        }
+        String id = args[0].toLowerCase();
+        Faction faction = factionManager.getFaction(id);
+        if (faction == null) {
+            sender.sendMessage(configManager.getMessage("faction.not_found", "&cFaction with ID '{id}' not found.").replace("{id}", id));
+            return;
+        }
+
+        double amount;
+        try {
+            amount = Double.parseDouble(args[1]);
+            if (amount < 0) { // Баланс может быть 0, но не отрицательным
+                sender.sendMessage(configManager.getMessage("economy.invalid_amount_non_negative", "&cAmount cannot be negative."));
+                return;
+            }
+        } catch (NumberFormatException e) {
+            sender.sendMessage(configManager.getMessage("economy.invalid_amount_number", "&cInvalid amount specified."));
+            return;
+        }
+
+        factionManager.setFactionBalance(id, amount); // Метод внутри пометит для сохранения
+        String formattedAmount = vaultIntegration != null ? vaultIntegration.format(amount) : String.format(Locale.US, "%.2f", amount);
+        sender.sendMessage(configManager.getMessage("setbalance.success", "&aSet balance for faction '{id}' to {amount}.")
+                .replace("{id}", id)
+                .replace("{amount}", formattedAmount));
+    }
+
+
+    private void handleUncuff(CommandSender sender, String[] args, String label) {
+        // Право: hfactions.admin.uncuff
+        if (!sender.hasPermission("hfactions.admin.uncuff")) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+        if (args.length < 1) {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} uncuff <player_name>").replace("{label}", label));
+            return;
+        }
+
+        if (cuffManager == null) {
+            sender.sendMessage(ChatColor.RED + "Internal error: CuffManager not available.");
+            return;
+        }
+
+        Player target = Bukkit.getPlayerExact(args[0]);
+        if (target == null || !target.isOnline()) {
+            sender.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+            return;
+        }
+
+        // Используем принудительное снятие
+        if (cuffManager.uncuffPlayer(target, (sender instanceof Player ? (Player)sender : null), true)) {
+            sender.sendMessage(configManager.getMessage("uncuff.success", "&aSuccessfully uncuffed {target}.").replace("{target}", target.getName()));
+        } else {
+            // Сообщение об ошибке (что игрок не был в наручниках) выдается внутри uncuffPlayer
+            // sender.sendMessage(configManager.getMessage("uncuff.not_cuffed", "&c{target} was not cuffed.").replace("{target}", target.getName()));
+        }
+    }
+
+
+    private void handleAdminMode(CommandSender sender, String[] args, String label) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(configManager.getMessage("command.player_only", "&cThis command can only be run by a player."));
+            return;
+        }
+        // Право: hfactions.admin.adminmode
+        if (!player.hasPermission("hfactions.admin.adminmode")) {
+            player.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+
+        if (playerManager.isAdminInMode(player)) {
+            // Если уже в режиме, выходим
+            playerManager.exitAdminMode(player, false); // false = не тихий выход
+        } else {
+            // Входим в режим
+            if (args.length < 1) {
+                player.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} adminmode <faction_id>").replace("{label}", label));
+                return;
+            }
+            String id = args[0].toLowerCase();
+            Faction faction = factionManager.getFaction(id);
+            if (faction == null) {
+                player.sendMessage(configManager.getMessage("faction.not_found", "&cFaction with ID '{id}' not found.").replace("{id}", id));
+                return;
+            }
+            playerManager.enterAdminMode(player, faction);
+        }
+    }
+
+    private void handleGiveItem(CommandSender sender, String subCommand, String[] args, String label) {
+        // Права: hfactions.admin.givetaser, hfactions.admin.givehandcuffs, hfactions.admin.giveprotocol
+        String itemName = subCommand.substring(4); // taser, handcuffs, protocol
+        String permission = "hfactions.admin.give" + itemName;
+
+        if (!sender.hasPermission(permission)) {
+            sender.sendMessage(configManager.getMessage("command.no_permission", "&cYou don't have permission for this command."));
+            return;
+        }
+
+        Player target;
+        if (args.length >= 1) {
+            target = Bukkit.getPlayerExact(args[0]);
+            if (target == null || !target.isOnline()) {
+                sender.sendMessage(configManager.getMessage("command.player_not_found", "&cPlayer '{player}' not found or is offline.").replace("{player}", args[0]));
+                return;
+            }
+        } else if (sender instanceof Player) {
+            target = (Player) sender; // Выдаем себе, если игрок и не указал цель
+        } else {
+            sender.sendMessage(configManager.getMessage("command.usage", "&cUsage: /{label} {subcommand} [player_name]").replace("{label}", label).replace("{subcommand}", subCommand));
+            return;
+        }
+
+        if (itemManager == null) {
+            sender.sendMessage(ChatColor.RED + "Internal error: ItemManager not available.");
+            return;
+        }
+
+        ItemStack itemToGive = null;
+        String itemNameFriendly = "Unknown Item";
+        switch (itemName) {
+            case "taser":
+                itemToGive = itemManager.getTaserItem();
+                itemNameFriendly = "Taser";
+                break;
+            case "handcuffs":
+                itemToGive = itemManager.getHandcuffsItem();
+                itemNameFriendly = "Handcuffs";
+                break;
+            case "protocol":
+                itemToGive = itemManager.getProtocolItem();
+                itemNameFriendly = "Protocol";
+                break;
+        }
+
+        if (itemToGive == null || itemToGive.getType() == Material.AIR) {
+            sender.sendMessage(configManager.getMessage("give.item_not_configured", "&cThe {item_name} item is not configured correctly.").replace("{item_name}", itemNameFriendly));
+            return;
+        }
+
+        // Выдаем предмет
+        target.getInventory().addItem(itemToGive);
+
+        String targetMsg = configManager.getMessage("give.target_received", "&aYou received a {item_name}.");
+        target.sendMessage(Utils.color(targetMsg.replace("{item_name}", itemNameFriendly)));
+
+        if (!sender.equals(target)) {
+            String senderMsg = configManager.getMessage("give.sender_gave", "&aYou gave a {item_name} to {target_name}.");
+            sender.sendMessage(Utils.color(senderMsg.replace("{item_name}", itemNameFriendly).replace("{target_name}", target.getName())));
+        }
+    }
+
+
+    // --- Вспомогательный метод для вывода помощи ---
+    private void sendHelp(CommandSender sender) {
+        sender.sendMessage(Utils.color("&6--- HFactions Help (Page 1) ---"));
+        String cmdPrefix = "/" + label + " ";
+        // Группируем команды для читаемости
+        sender.sendMessage(Utils.color("&eInformation:"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "help &f- Show this message"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "list &f- List all factions"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "info <id> &f- Show faction details"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "listrecipes &f- List custom recipes"));
+        sender.sendMessage(Utils.color("&ePlayer Actions:"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "leave &f- Leave your current faction"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "chat (c, fc) &f- Toggle faction chat"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "balance (bal) &f- Check faction treasury balance"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "deposit <amount> (dep) &f- Deposit money"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "withdraw <amount> (wd) &f- Withdraw money"));
+        sender.sendMessage(Utils.color(" &7" + cmdPrefix + "warehouse (wh) &f- Open faction warehouse"));
+
+        // Показываем команды управления только если есть хоть какие-то права
+        if (sender.hasPermission("hfactions.faction.invite") || sender.hasPermission("hfactions.faction.kick") || sender.hasPermission("hfactions.faction.promote") || sender.hasPermission("hfactions.faction.demote") || sender.hasPermission("hfactions.faction.setrank") || sender.hasPermission("hfactions.faction.manage_ranks")) {
+            sender.sendMessage(Utils.color("&eFaction Management:"));
+            if (sender.hasPermission("hfactions.faction.invite")) sender.sendMessage(Utils.color(" &7" + cmdPrefix + "invite <player> &f- Invite player"));
+            if (sender.hasPermission("hfactions.faction.kick")) sender.sendMessage(Utils.color(" &7" + cmdPrefix + "kick <player> &f- Kick player"));
+            if (sender.hasPermission("hfactions.faction.promote")) sender.sendMessage(Utils.color(" &7" + cmdPrefix + "promote <player> &f- Promote player"));
+            if (sender.hasPermission("hfactions.faction.demote")) sender.sendMessage(Utils.color(" &7" + cmdPrefix + "demote <player> &f- Demote player"));
+            if (sender.hasPermission("hfactions.faction.setrank")) sender.sendMessage(Utils.color(" &7" + cmdPrefix + "setrank <player> <rank_id> &f- Set player rank"));
+            if (sender.hasPermission("hfactions.faction.manage_ranks")) sender.sendMessage(Utils.color(" &7" + cmdPrefix + "manageranks &f- Manage rank display names"));
+        }
+        // Команды PD
+        if (sender.hasPermission("hfactions.pd.fine")) {
+            sender.sendMessage(Utils.color("&ePolice Actions:"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "fine <player> <amount> <reason> &f- Issue a fine"));
+        }
+        // Команды Территорий
+        if (sender.hasPermission("hfactions.territory.help") || sender.hasPermission("hfactions.territory.list") || sender.hasPermission("hfactions.territory.manage.own") || sender.hasPermission("hfactions.admin.territory")) {
+            sender.sendMessage(Utils.color("&eTerritories: &7Use " + cmdPrefix + "territory help"));
+        }
+        // Команды Админа
+        if (sender.hasPermission("hfactions.admin.*")) { // Показываем все, если есть общий перм
+            sender.sendMessage(Utils.color("&cAdmin Commands:"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "reload &f- Reload configurations"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "create <id> \"<N>\" <T> [bal] [size] &f- Create faction"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "delete <id> &f- Delete faction"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "setbalance <id> <amount> &f- Set faction balance"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "uncuff <player> &f- Force uncuff player"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "adminmode [id] &f- Toggle admin mode"));
+            sender.sendMessage(Utils.color(" &7" + cmdPrefix + "give<item> [player] &f- Give special item"));
+            // Команду territory map можно сюда добавить, если она только для админов
+        }
+    }
+
+
+    // --- Автодополнение ---
     @Override
-    public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
-        List<String> completions = new ArrayList<>(); List<String> suggestions = new ArrayList<>(); String currentArg = args[args.length - 1].toLowerCase(); String commandLabel = command.getLabel().toLowerCase();
-        if (configManager.getFactionChatAliases().contains(commandLabel) || configManager.getFineCommandAliases().contains(commandLabel)) { return completions; }
-        if (args.length == 1) { if (sender.hasPermission("hfactions.command.help")) suggestions.add("help"); if (sender.hasPermission("hfactions.command.list")) suggestions.add("list"); if (sender.hasPermission("hfactions.command.info")) suggestions.add("info"); if (sender.hasPermission("hfactions.command.listrecipes")) suggestions.add("listrecipes"); if (sender.hasPermission("hfactions.player.leave")) suggestions.add("leave"); if (sender.hasPermission("hfactions.faction.invite")) suggestions.add("invite"); if (sender.hasPermission("hfactions.faction.kick")) suggestions.add("kick"); if (sender.hasPermission("hfactions.faction.promote")) suggestions.add("promote"); if (sender.hasPermission("hfactions.faction.demote")) suggestions.add("demote"); if (sender.hasPermission("hfactions.faction.setrank")) suggestions.add("setrank"); if (sender.hasPermission("hfactions.faction.manage_ranks")) suggestions.add("manageranks"); if (configManager.isWarehouseEnabled() && sender.hasPermission(configManager.getWarehouseOpenPermission())) { suggestions.add("warehouse"); suggestions.add("wh"); } if (economy != null) { if (sender.hasPermission("hfactions.faction.balance.view")) { suggestions.add("balance"); suggestions.add("bal"); } if (sender.hasPermission("hfactions.faction.deposit")) { suggestions.add("deposit"); suggestions.add("dep"); } if (sender.hasPermission("hfactions.faction.withdraw")) { suggestions.add("withdraw"); suggestions.add("wd"); } } if (configManager.isFactionChatEnabled()) { suggestions.add("chat"); suggestions.add("c"); } if (configManager.isFiningEnabled() && sender.hasPermission(configManager.getFinePermissionNode())) { suggestions.add("fine"); } if (configManager.isDynmapEnabled() && (sender.hasPermission("hfactions.admin.territory") || isLeader(sender))) { suggestions.add("territory"); } if (sender.hasPermission("hfactions.admin.uncuff")) suggestions.add("uncuff"); if (sender.hasPermission("hfactions.admin.create")) suggestions.add("create"); if (sender.hasPermission("hfactions.admin.delete")) suggestions.add("delete"); if (sender.hasPermission("hfactions.admin.reload")) suggestions.add("reload"); if (sender.hasPermission("hfactions.admin.setbalance")) suggestions.add("setbalance"); if (sender.hasPermission("hfactions.admin.adminmode")) suggestions.add("adminmode"); if (sender.hasPermission("hfactions.admin.givetaser")) suggestions.add("givetaser"); if (sender.hasPermission("hfactions.admin.givehandcuffs")) suggestions.add("givehandcuffs"); if (sender.hasPermission("hfactions.admin.giveprotocol")) suggestions.add("giveprotocol"); }
-        else if (args.length >= 2) { String subCmd = args[0].toLowerCase(); if (subCmd.equals("territory")) { if (args.length == 2) { boolean isAdmin = sender.hasPermission("hfactions.admin.territory"); boolean isLdr = isLeader(sender); suggestions.add("list"); if (isAdmin || isLdr) suggestions.addAll(Arrays.asList("define", "corner", "clear", "claim", "delete")); if (isAdmin) suggestions.add("map"); suggestions.add("help"); } else if (args.length == 3) { String terSubCmd = args[1].toLowerCase(); if (Arrays.asList("list", "delete", "claim").contains(terSubCmd) && dynmapManager != null) { suggestions.addAll(dynmapManager.getAllTerritories().stream().map(data -> data.zoneName).toList()); } else if (terSubCmd.equals("define")) { suggestions.add("<название_зоны>"); } } else if (args.length == 4 && args[1].equalsIgnoreCase("claim")) { if (sender.hasPermission("hfactions.admin.territory")) { suggestions.addAll(factionManager.getAllFactions().stream().map(Faction::getId).toList()); } } } else if (Arrays.asList("info", "delete", "setbalance", "adminmode").contains(subCmd)) { if (args.length == 2) suggestions.addAll(factionManager.getAllFactions().stream().map(Faction::getId).toList()); } else if (Arrays.asList("invite", "kick", "promote", "demote", "setrank", "fine").contains(subCmd)) { if (args.length == 2) suggestions.addAll(Bukkit.getOnlinePlayers().stream().map(Player::getName).filter(name -> !name.equals(sender.getName())).toList()); } else if (subCmd.equals("setrank")) { if (args.length == 3) { Faction userFaction = null; if (sender instanceof Player) userFaction = playerManager.getPlayerFaction(((Player)sender).getUniqueId()); EffectiveFactionData effData = (sender instanceof Player) ? getEffectiveFactionData((Player)sender) : null; if (effData != null && effData.isInFaction()) { effData.faction().getRanks().keySet().forEach(rankId -> suggestions.add(String.valueOf(rankId))); } else if (sender.hasPermission("hfactions.admin.*")) for(int i=1; i<=11; i++) suggestions.add(String.valueOf(i)); } } else if (subCmd.equals("uncuff")) { if (args.length == 2) suggestions.addAll(cuffManager.getCuffedPlayerUUIDs().stream().map(Bukkit::getOfflinePlayer).filter(Objects::nonNull).map(OfflinePlayer::getName).filter(Objects::nonNull).toList()); } else if (subCmd.equals("create")) { if (args.length == 4 && !args[2].startsWith("\"")) suggestions.add("\"<Название>\""); else if (args.length >= 4) { int nameEndIdx = findQuotedStringEndIndex(args, 2); if (nameEndIdx != -1 && args.length == nameEndIdx + 1) suggestions.addAll(Arrays.stream(FactionType.values()).map(Enum::name).toList()); } } else if (Arrays.asList("givetaser", "givehandcuffs", "giveprotocol").contains(subCmd)) { if (args.length == 2) suggestions.addAll(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList()); } else if (Arrays.asList("deposit", "dep", "withdraw", "wd", "setbalance").contains(subCmd)) { if (args.length == 2 && subCmd.equals("setbalance")) suggestions.addAll(factionManager.getAllFactions().stream().map(Faction::getId).toList()); else if (args.length == (subCmd.equals("setbalance") ? 3 : 2)) suggestions.add("<сумма>"); } else if (subCmd.equals("fine")) { if (args.length == 3) suggestions.add("<сумма>"); else if (args.length == 4) suggestions.add("<причина>"); } }
-        String currentArgLower = currentArg.toLowerCase(); for (String suggestion : suggestions) { if (suggestion.toLowerCase().startsWith(currentArgLower)) { completions.add(suggestion); } } return completions;
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        List<String> completions = new ArrayList<>();
+        List<String> possibilities = new ArrayList<>();
+
+        // Автодополнение для первой подкоманды
+        if (args.length == 1) {
+            possibilities.addAll(baseSubCommands);
+        }
+        // Автодополнение для аргументов подкоманд
+        else if (args.length >= 2) {
+            String subCommand = args[0].toLowerCase();
+            switch (subCommand) {
+                case "info":
+                case "delete":
+                case "setbalance":
+                case "adminmode":
+                    // Предлагаем ID фракций
+                    if (args.length == 2 && factionManager != null) {
+                        possibilities.addAll(factionManager.getAllFactions().keySet());
+                    }
+                    break;
+                case "invite":
+                case "kick":
+                case "promote":
+                case "demote":
+                case "setrank":
+                case "fine":
+                case "uncuff":
+                case "givetaser":
+                case "givehandcuffs":
+                case "giveprotocol":
+                    // Предлагаем ники онлайн игроков
+                    if (args.length == 2) {
+                        Bukkit.getOnlinePlayers().forEach(p -> possibilities.add(p.getName()));
+                    }
+                    // Для setrank предлагаем ID рангов третьим аргументом
+                    else if (args.length == 3 && subCommand.equals("setrank")) {
+                        // Получаем фракцию цели (если можем)
+                        Player target = Bukkit.getPlayerExact(args[1]);
+                        if (target != null && playerManager != null) {
+                            Faction targetFaction = playerManager.getPlayerFaction(target);
+                            if (targetFaction != null) {
+                                targetFaction.getRanks().keySet().stream().map(String::valueOf).forEach(possibilities::add);
+                            } else { // Или все ранги 1-11, если не можем определить фракцию
+                                for (int i = 1; i <= 11; i++) possibilities.add(String.valueOf(i));
+                            }
+                        } else { // Или все ранги 1-11
+                            for (int i = 1; i <= 11; i++) possibilities.add(String.valueOf(i));
+                        }
+                    }
+                    break;
+                case "create":
+                    // 4-й аргумент - тип фракции
+                    if (args.length == 4) {
+                        Arrays.stream(FactionType.values()).map(Enum::name).forEach(possibilities::add);
+                    }
+                    break;
+                case "territory":
+                    handleTerritoryTabComplete(sender, args, possibilities);
+                    break;
+                // Добавить другие по необходимости
+            }
+        }
+
+        // Фильтруем и возвращаем результат
+        String currentArg = args[args.length - 1].toLowerCase();
+        for (String possibility : possibilities) {
+            if (possibility.toLowerCase().startsWith(currentArg)) {
+                // Проверка прав перед добавлением в автодополнение (базовая)
+                if (hasPermissionForSubCommand(sender, args[0].toLowerCase(), possibility, args.length)) {
+                    completions.add(possibility);
+                }
+            }
+        }
+        // Сортируем для удобства
+        // Collections.sort(completions, String.CASE_INSENSITIVE_ORDER);
+        return completions;
+    }
+
+    // Вспомогательный метод для проверки прав для автодополнения (упрощенный)
+    private boolean hasPermissionForSubCommand(CommandSender sender, String subCommand, String possibility, int argLength) {
+        // На первом уровне проверяем права на саму подкоманду
+        if (argLength == 1) {
+            String neededPerm = switch (subCommand) {
+                case "reload", "create", "delete", "setbalance", "uncuff", "adminmode", "givetaser", "givehandcuffs", "giveprotocol" -> "hfactions.admin." + subCommand;
+                case "territory" -> "hfactions.territory.help"; // Базовое право для доступа к /hf territory
+                case "fine" -> "hfactions.pd.fine";
+                case "invite", "kick", "promote", "demote", "setrank", "manageranks" -> "hfactions.faction." + subCommand;
+                case "balance", "bal" -> "hfactions.faction.balance.view";
+                case "deposit", "dep" -> "hfactions.faction.deposit";
+                case "withdraw", "wd" -> "hfactions.faction.withdraw"; // Или manage_balance
+                case "warehouse", "wh" -> "hfactions.faction.warehouse.open";
+                // Для default:true команд права не проверяем
+                default -> null;
+            };
+            // Если право не определено (default:true) или есть право - разрешаем
+            return neededPerm == null || sender.hasPermission(neededPerm) || sender.hasPermission("hfactions.admin.*");
+        }
+        // Для следующих уровней пока разрешаем всё (можно усложнить проверку)
+        return true;
+    }
+
+    // Автодополнение для /hf territory
+    private void handleTerritoryTabComplete(CommandSender sender, String[] args, List<String> possibilities) {
+        if (args.length == 2) { // Предлагаем подкоманды территории
+            List<String> subs = Arrays.asList("list", "define", "corner", "clear", "claim", "delete", "map", "help");
+            possibilities.addAll(subs);
+        } else if (args.length == 3) {
+            String territorySub = args[1].toLowerCase();
+            // Предлагаем имена территорий для list, delete
+            if (territorySub.equals("list") || territorySub.equals("delete")) {
+                if (dynmapManager != null) possibilities.addAll(dynmapManager.getTerritoryNames());
+            }
+            // Предлагаем имя для claim
+            else if (territorySub.equals("claim")) {
+                // Нет смысла автодополнять имя новой территории
+            }
+        } else if (args.length == 4) {
+            String territorySub = args[1].toLowerCase();
+            // Предлагаем ID фракции для claim, если админ
+            if (territorySub.equals("claim") && sender.hasPermission("hfactions.admin.territory")) {
+                if (factionManager != null) possibilities.addAll(factionManager.getAllFactions().keySet());
+            }
+        }
     }
 }

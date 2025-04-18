@@ -18,7 +18,6 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.isyateq.hfactions.models.Faction;
-import org.isyateq.hfactions.models.FactionType;
 import org.isyateq.hfactions.HFactions;
 import org.isyateq.hfactions.managers.*; // Импортируем все менеджеры
 import org.isyateq.hfactions.util.Utils;
@@ -47,6 +46,7 @@ public class GuiClickListener implements Listener {
         Player player = (Player) event.getWhoClicked();
         Inventory clickedInventory = event.getClickedInventory();
         Inventory topInventory = event.getView().getTopInventory();
+        guiManager.handleWarehouseClick(event, topInventory);
         if (topInventory == null) return; // Добавлена проверка на null
         InventoryHolder holder = topInventory.getHolder();
         if (holder == null) return; // Игнорируем стандартные инвентари без холдера
