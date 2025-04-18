@@ -1,129 +1,152 @@
-package org.isyateq.hfactions.tasks; // Или .tasks
+package org.isyateq.hfactions.tasks;
 
-import net.milkbowl.vault.economy.Economy;
-import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.isyateq.hfactions.models.Faction;
-import org.isyateq.hfactions.models.FactionRank;
 import org.isyateq.hfactions.HFactions;
+import org.isyateq.hfactions.integrations.VaultIntegration; // Нужен Vault
 import org.isyateq.hfactions.managers.ConfigManager;
 import org.isyateq.hfactions.managers.FactionManager;
 import org.isyateq.hfactions.managers.PlayerManager;
-import org.isyateq.hfactions.util.Utils;
+import org.isyateq.hfactions.models.Faction;
+import org.isyateq.hfactions.models.FactionRank;
+import org.isyateq.hfactions.util.Utils; // Для color
 
-import java.text.DecimalFormat;
-import java.util.Collection;
-import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
+import java.util.logging.Level;
 
 public class PaydayTask extends BukkitRunnable {
 
     private final HFactions plugin;
     private final PlayerManager playerManager;
     private final FactionManager factionManager;
+    private final VaultIntegration vaultIntegration; // Получаем интеграцию
     private final ConfigManager configManager;
-    private final Economy economy;
+
     private final boolean requireOnline;
-    private final boolean logPayments;
-    private final String messageFormat;
-    private final String logFormat;
-    private final DecimalFormat moneyFormat = new DecimalFormat("#,##0.00"); // Форматтер
+    private final String paydayMessage;
+    private final String paydayErrorNoAccount;
+    private final String paydayErrorNoFactionFunds;
 
     public PaydayTask(HFactions plugin) {
         this.plugin = plugin;
+        // Получаем зависимости
         this.playerManager = plugin.getPlayerManager();
         this.factionManager = plugin.getFactionManager();
+        this.vaultIntegration = plugin.getVaultIntegration();
         this.configManager = plugin.getConfigManager();
-        this.economy = HFactions.getEconomy(); // Получаем экономику
 
-        // Загружаем настройки из конфига
-        this.requireOnline = configManager.getConfig().getBoolean("payday.require_online", true);
-        this.logPayments = configManager.getConfig().getBoolean("payday.log_payments", true);
-        this.messageFormat = configManager.getLangMessage("usage", "payday.message", "&7{command} - {description}"); // Используем getLangMessage
-        this.logFormat = configManager.getConfig().getString("payday.log_format", "[Payday] Paid {amount} to {player} (Faction: {faction_id}, Rank: {rank_id})");
+        // Проверки на null
+        if (this.playerManager == null) plugin.getLogger().severe("PlayerManager is null in PaydayTask!");
+        if (this.factionManager == null) plugin.getLogger().severe("FactionManager is null in PaydayTask!");
+        if (this.vaultIntegration == null) plugin.getLogger().warning("VaultIntegration is null in PaydayTask! Payday will likely fail."); // Warning, т.к. Vault может быть не установлен
+        if (this.configManager == null || configManager.getConfig() == null) {
+            plugin.getLogger().severe("ConfigManager or config is null in PaydayTask! Using default settings.");
+            // Задаем дефолты, чтобы избежать NPE
+            this.requireOnline = true;
+            this.paydayMessage = Utils.color("&a[PayDay] You received ${amount} salary.");
+            this.paydayErrorNoAccount = Utils.color("&c[PayDay] Error: Could not access your bank account.");
+            this.paydayErrorNoFactionFunds = Utils.color("&c[PayDay] Error: Your faction doesn't have enough funds to pay your salary.");
+        } else {
+            FileConfiguration config = configManager.getConfig();
+            this.requireOnline = config.getBoolean("payday.require_online", true);
+            this.paydayMessage = Utils.color(config.getString("payday.message", "&a[PayDay] You received {amount} salary."));
+            this.paydayErrorNoAccount = Utils.color(config.getString("payday.error_no_account", "&c[PayDay] Error: Could not access your bank account."));
+            this.paydayErrorNoFactionFunds = Utils.color(config.getString("payday.error_no_faction_funds", "&c[PayDay] Error: Your faction doesn't have enough funds to pay salary."));
+        }
+
     }
 
     @Override
     public void run() {
-        if (economy == null) {
-            plugin.logWarning("Payday task running, but Vault Economy is not available. Skipping payday.");
-            return; // Не можем платить без экономики
+        plugin.getLogger().info("Processing PayDay...");
+        if (playerManager == null || factionManager == null || vaultIntegration == null) {
+            plugin.getLogger().severe("Cannot process PayDay: One or more managers are null.");
+            return;
         }
 
-        plugin.logInfo("Processing payday...");
         int paidCount = 0;
-        double totalPaid = 0.0;
+        int skippedOffline = 0;
+        int skippedNoFaction = 0;
+        int skippedNoRank = 0;
+        int skippedNoSalary = 0;
+        int skippedNoFunds = 0;
+        int skippedNoAccount = 0;
 
-        // Получаем список всех игроков, о которых мы знаем (из кэша PlayerManager)
-        // Это включает и оффлайн игроков, если require_online = false
-        Collection<UUID> playersToProcess;
-        if (requireOnline) {
-            // Берем только онлайн игроков
-            playersToProcess = Bukkit.getOnlinePlayers().stream().map(Player::getUniqueId).collect(Collectors.toList());
-        } else {
-            // Берем всех игроков из нашего кэша
-            playersToProcess = playerManager.getAllPlayerFactionEntries().keySet();
-        }
+        // Кого обрабатываем: всех онлайн или всех, кто есть в базе?
+        // ТЗ не уточняет, но require_online намекает на обработку только онлайн игроков.
+        // Если нужно платить оффлайн, логику нужно будет сильно усложнить (загрузка данных оффлайн игроков).
+        // Пока реализуем для онлайн игроков.
 
-        for (UUID playerUuid : playersToProcess) {
-            String factionId = playerManager.getPlayerFactionId(playerUuid);
-            Integer rankId = playerManager.getPlayerRankId(playerUuid);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            UUID uuid = player.getUniqueId();
+            String factionId = playerManager.getPlayerFactionId(player);
+            Integer rankId = playerManager.getPlayerRankId(player);
 
-            // Проверяем, состоит ли игрок во фракции и есть ли у него ранг
-            if (factionId != null && rankId != null) {
-                Faction faction = factionManager.getFaction(factionId);
-                if (faction == null) continue; // Фракция не найдена? Пропускаем
+            if (factionId == null) {
+                skippedNoFaction++;
+                continue; // Игрок не во фракции
+            }
+            if (rankId == null) {
+                skippedNoRank++;
+                plugin.getLogger().warning("Player " + player.getName() + " is in faction " + factionId + " but has null rank ID during payday.");
+                continue; // Ошибка данных
+            }
 
-                FactionRank rank = faction.getRank(rankId);
-                if (rank == null) continue; // Ранг не найден? Пропускаем
+            Faction faction = factionManager.getFaction(factionId);
+            if (faction == null) {
+                plugin.getLogger().warning("Faction " + factionId + " not found during payday for player " + player.getName());
+                continue; // Фракция удалена?
+            }
 
-                double salary = rank.getSalary();
-                if (salary <= 0) continue; // Зарплата нулевая или отрицательная, пропускаем
+            FactionRank rank = faction.getRank(rankId);
+            if (rank == null) {
+                skippedNoRank++;
+                plugin.getLogger().warning("Rank ID " + rankId + " not found in faction " + factionId + " during payday for player " + player.getName());
+                continue; // Ранг удален?
+            }
 
-                // --- Выплата Зарплаты ---
-                OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(playerUuid); // Получаем OfflinePlayer для Vault
-                if (!requireOnline || offlinePlayer.isOnline()) { // Проверяем онлайн, если нужно
-                    EconomyResponse response = economy.depositPlayer(offlinePlayer, salary); // Пытаемся заплатить
+            double salary = rank.getSalary();
+            if (salary <= 0) {
+                skippedNoSalary++;
+                continue; // Зарплата не установлена или равна нулю
+            }
 
-                    if (response.transactionSuccess()) {
-                        paidCount++;
-                        totalPaid += salary;
+            // Проверяем баланс фракции
+            if (!factionManager.withdrawFromFaction(factionId, salary)) { // Метод withdraw уже помечает для сохранения
+                skippedNoFunds++;
+                player.sendMessage(paydayErrorNoFactionFunds);
+                plugin.getLogger().warning("Faction " + factionId + " has insufficient funds (" + faction.getBalance() + ") to pay salary (" + salary + ") to " + player.getName());
+                continue; // Недостаточно средств
+            }
 
-                        // Отправляем сообщение игроку, если он онлайн
-                        Player onlinePlayer = offlinePlayer.getPlayer();
-                        if (onlinePlayer != null) {
-                            Map<String, String> replacements = Map.of(
-                                    "amount", moneyFormat.format(salary),
-                                    "currency", economy.currencyNamePlural(),
-                                    "faction_name", faction.getName(),
-                                    "rank_name", rank.getDisplayName()
-                            );
-                            Utils.msg(onlinePlayer, configManager.getLangMessage("payday.message", replacements));
-                        }
-
-                        // Логирование
-                        if (logPayments) {
-                            String playerName = offlinePlayer.getName() != null ? offlinePlayer.getName() : playerUuid.toString();
-                            String logMsg = logFormat
-                                    .replace("{amount}", moneyFormat.format(salary))
-                                    .replace("{player}", playerName)
-                                    .replace("{faction_id}", factionId)
-                                    .replace("{rank_id}", String.valueOf(rankId));
-                            plugin.logInfo(logMsg);
-                        }
-                    } else {
-                        // Ошибка выплаты
-                        plugin.logWarning("Failed to pay salary to " + (offlinePlayer.getName() != null ? offlinePlayer.getName() : playerUuid) + ": " + response.errorMessage);
-                    }
-                }
-                // Если requireOnline = true и игрок оффлайн, просто пропускаем его
+            // Начисляем зарплату игроку через Vault
+            if (vaultIntegration.deposit(uuid, salary)) {
+                paidCount++;
+                String formattedAmount = vaultIntegration.format(salary); // Форматируем сумму
+                player.sendMessage(paydayMessage.replace("{amount}", formattedAmount));
+            } else {
+                skippedNoAccount++;
+                player.sendMessage(paydayErrorNoAccount);
+                plugin.getLogger().severe("Failed to deposit payday salary (" + salary + ") to player " + player.getName() + " (UUID: " + uuid + "). Refunding faction...");
+                // Возвращаем деньги фракции, если не удалось начислить игроку
+                factionManager.depositToFaction(factionId, salary); // Метод deposit помечает для сохранения
             }
         }
 
-        plugin.logInfo("Payday processing finished. Paid " + moneyFormat.format(totalPaid) + " to " + paidCount + " players.");
+        // Если нужно было платить оффлайн, здесь была бы логика загрузки данных из БД.
+
+        plugin.getLogger().info("PayDay processing complete. Paid: " + paidCount +
+                ", No Faction: " + skippedNoFaction +
+                ", No Rank/Salary: " + (skippedNoRank + skippedNoSalary) +
+                ", No Faction Funds: " + skippedNoFunds +
+                ", Bank Account Error: " + skippedNoAccount +
+                (requireOnline ? "" : ", Skipped Offline: " + skippedOffline) // Показываем пропущенных оффлайн только если не требовался онлайн
+        );
+
+        // Планируем сохранение измененных фракций (если были изменения баланса)
+        // FactionManager сам запланирует сохранение при вызове withdraw/deposit через markAsModified
+        // factionManager.saveModifiedFactions(); // Не нужно вызывать здесь напрямую
     }
 }

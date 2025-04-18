@@ -87,4 +87,8 @@ public class FactionRank {
         // Генерируем хеш-код на основе всех полей
         return Objects.hash(internalId, defaultName, displayName, salary, permissions);
     }
+
+    public void resetDisplayName() {
+        this.displayName = this.defaultName;
+    }
 }

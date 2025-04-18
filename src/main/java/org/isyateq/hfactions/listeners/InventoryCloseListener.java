@@ -20,9 +20,6 @@ public class InventoryCloseListener implements Listener {
         this.plugin = plugin;
         // GuiManager должен быть инициализирован до этого листенера
         this.guiManager = plugin.getGuiManager();
-        if (this.guiManager == null) {
-            plugin.logError("FATAL: GuiManager is null in InventoryCloseListener! Warehouse GUI might not save.");
-        }
     }
 
     @EventHandler
@@ -32,6 +29,7 @@ public class InventoryCloseListener implements Listener {
         // Player player = (Player) event.getPlayer(); // Пока не используется
         Inventory closedInventory = event.getInventory();
         InventoryHolder holder = closedInventory.getHolder();
+        guiManager.handleWarehouseClose(event);
 
         // Сохраняем склад фракции, если это был он
         if (holder instanceof GuiManager.WarehouseGuiHolder) {
