@@ -106,4 +106,7 @@ public class OraxenIntegration {
             return null;
         }
     }
+
+    public ItemStack getItemStack(String resultItemId) {
+    }
 }
