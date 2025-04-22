@@ -1,15 +1,15 @@
 package org.isyateq.hfactions.managers;
 
-// Bukkit Imports
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey; // Импорт для ключа ранга
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
-
-// HFactions Imports
+import org.bukkit.inventory.meta.ItemMeta; // Импорт ItemMeta
+import org.bukkit.persistence.PersistentDataType; // Импорт PersistentDataType
 import org.isyateq.hfactions.HFactions;
 import org.isyateq.hfactions.gui.FactionInviteGUI;
 import org.isyateq.hfactions.gui.FactionRanksGUI;
@@ -17,470 +17,490 @@ import org.isyateq.hfactions.gui.FactionWarehouseGUI;
 import org.isyateq.hfactions.models.Faction;
 import org.isyateq.hfactions.models.FactionRank;
 import org.isyateq.hfactions.models.PendingInvite;
-import org.isyateq.hfactions.util.Utils; // Для Utils.color
+import org.isyateq.hfactions.util.Utils;
 
-// Java Imports
-import java.util.List;
+import java.util.Arrays;
 import java.util.Map;
-import java.util.UUID;
+import java.util.UUID; // Импорт UUID
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 
 public class GuiManager {
 
     private final HFactions plugin;
     private final PlayerManager playerManager;
     private final FactionManager factionManager;
-    private final ConfigManager configManager;
-    private final ConversationManager conversationManager; // Добавляем ConversationManager
+    private final ConfigManager configManager; // Оставляем, используется в addInvite
 
-    // Отслеживание открытых GUI
-    private final Map<Inventory, String> openWarehouses = new ConcurrentHashMap<>(); // Инвентарь -> ID Фракции
-    private final Map<Inventory, UUID> openInviteGuis = new ConcurrentHashMap<>(); // Инвентарь -> UUID Цели
-    private final Map<Inventory, String> openRankGuis = new ConcurrentHashMap<>(); // Инвентарь -> ID Фракции
+    // Отслеживаем открытые GUI
+    private final Map<Inventory, String> openWarehouses = new ConcurrentHashMap<>();
+    private final Map<Inventory, String> openRankGuis = new ConcurrentHashMap<>();
+    private final Map<Inventory, UUID> openInviteGuis = new ConcurrentHashMap<>();
 
 
     public GuiManager(HFactions plugin) {
         this.plugin = plugin;
-        // Получаем зависимости
+        // Получаем менеджеры из главного класса
         this.playerManager = plugin.getPlayerManager();
         this.factionManager = plugin.getFactionManager();
-        this.configManager = plugin.getConfigManager();
-        this.conversationManager = plugin.getConversationManager(); // Получаем ConversationManager
-
-        // Проверки на null
-        if (this.playerManager == null) plugin.getLogger().severe("PlayerManager is null in GuiManager!");
-        if (this.factionManager == null) plugin.getLogger().severe("FactionManager is null in GuiManager!");
-        if (this.configManager == null) plugin.getLogger().severe("ConfigManager is null in GuiManager!");
-        if (this.conversationManager == null) plugin.getLogger().severe("ConversationManager is null in GuiManager!"); // Проверка нового менеджера
+        this.configManager = plugin.getConfigManager(); // Получаем ConfigManager
+        // Проверки на null, если менеджеры могут быть не инициализированы
+        if (this.playerManager == null || this.factionManager == null || this.configManager == null) {
+            plugin.getLogger().severe("One or more managers are null in GuiManager constructor! GUIs might not work.");
+            // Можно выбросить исключение, чтобы предотвратить запуск с нерабочим GUI
+            // throw new IllegalStateException("Required managers not available for GuiManager");
+        }
     }
 
     // --- Открытие GUI ---
 
     public void openInviteGUI(Player target, PendingInvite invite) {
-        if (target == null || invite == null) {
-            plugin.getLogger().warning("Attempted to open invite GUI with null target or invite.");
-            return;
-        }
-        // Проверяем, онлайн ли игрок перед открытием
-        if (!target.isOnline()){
-            plugin.getLogger().fine("Target player " + target.getName() + " is offline, cannot open invite GUI.");
-            // Можно удалить приглашение здесь, если игрок вышел
-            // playerManager.removeInvite(target);
-            return;
-        }
-
-        FactionInviteGUI inviteGUI = new FactionInviteGUI(plugin);
-        Inventory gui = inviteGUI.getInventory(invite);
-        if (gui != null) {
-            openInviteGuis.put(gui, target.getUniqueId());
-            // Используем Bukkit.getScheduler().runTask для гарантии выполнения в основном потоке
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (target.isOnline()){ // Еще раз проверка на онлайн
-                    target.openInventory(gui);
-                }
-            });
-        } else {
-            plugin.getLogger().warning("Failed to create invite GUI for " + target.getName());
-        }
+        FactionInviteGUI inviteGUI = new FactionInviteGUI(plugin, invite);
+        Inventory gui = inviteGUI.getInventory();
+        openInviteGuis.put(gui, target.getUniqueId());
+        target.openInventory(gui);
     }
 
     public void openRanksGUI(Player player) {
-        if (player == null || playerManager == null || factionManager == null) return;
         Faction faction = playerManager.getPlayerFaction(player);
         if (faction == null) {
-            if (configManager != null) player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
-            else player.sendMessage(Utils.color("&cYou are not in a faction."));
+            player.sendMessage(Utils.color("&cYou are not in a faction."));
+            return;
+        }
+        if (!hasPermission(player, "hfactions.faction.manage_ranks")) {
+            player.sendMessage(Utils.color("&cYou do not have permission to manage ranks."));
             return;
         }
 
-        // Проверяем права на управление рангами ПЕРЕД открытием GUI
-        if (!player.hasPermission("hfactions.faction.manage_ranks")) {
-            FactionRank rank = playerManager.getPlayerRank(player);
-            if (rank == null || !rank.getPermissions().contains("hfactions.faction.manage_ranks")) {
-                player.sendMessage(configManager != null ? configManager.getMessage("ranks.no_permission_open", "&cYou do not have permission to manage ranks.")
-                        : Utils.color("&cYou do not have permission to manage ranks."));
-                return;
-            }
-        }
-
-
-        FactionRanksGUI ranksGUI = new FactionRanksGUI(plugin);
-        Inventory gui = ranksGUI.getInventory(faction);
-        if (gui != null) {
-            openRankGuis.put(gui, faction.getId());
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (player.isOnline()){
-                    player.openInventory(gui);
-                }
-            });
-        } else {
-            plugin.getLogger().warning("Failed to create ranks GUI for " + player.getName());
-        }
+        FactionRanksGUI ranksGUI = new FactionRanksGUI(plugin, faction);
+        Inventory gui = ranksGUI.getInventory();
+        openRankGuis.put(gui, faction.getId());
+        player.openInventory(gui);
     }
 
-
     public void openWarehouseGUI(Player player, int page) {
-        if (player == null || playerManager == null || factionManager == null || configManager == null) return;
-
         Faction faction = playerManager.getPlayerFaction(player);
         if (faction == null) {
-            player.sendMessage(configManager.getMessage("faction.not_in", "&cYou are not in a faction."));
+            player.sendMessage(Utils.color("&cYou are not in a faction."));
             return;
         }
-
-        // Проверка прав на открытие
-        boolean canOpen = player.hasPermission("hfactions.faction.warehouse.open") || player.hasPermission("hfactions.admin.*");
-        if (!canOpen) {
-            FactionRank rank = playerManager.getPlayerRank(player);
-            if (rank != null && rank.getPermissions().contains("hfactions.faction.warehouse.open")) {
-                canOpen = true;
-            }
-        }
-
-        if (!canOpen) {
-            player.sendMessage(configManager.getMessage("warehouse.no_permission_open", "&cYou do not have permission to open the faction warehouse."));
+        if (!hasPermission(player, "hfactions.faction.warehouse.open")) {
+            player.sendMessage(Utils.color("&cYou do not have permission to open the faction warehouse."));
             return;
         }
 
         FactionWarehouseGUI warehouseGUI = new FactionWarehouseGUI(plugin, faction);
         Inventory gui = warehouseGUI.getInventory(page);
-        if (gui != null) {
-            openWarehouses.put(gui, faction.getId());
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (player.isOnline()){
-                    player.openInventory(gui);
-                }
-            });
-        } else {
-            plugin.getLogger().warning("Failed to create warehouse GUI for " + player.getName());
-        }
-
-    }
-
-    // --- Обработка событий GUI ---
-
-    /**
-     * Обрабатывает клик в любом из GUI плагина. Вызывается из GuiClickListener.
-     */
-    public void handleGuiClick(InventoryClickEvent event) {
-        if (!(event.getWhoClicked() instanceof Player)) return;
-        Player player = (Player) event.getWhoClicked();
-        Inventory topInventory = event.getView().getTopInventory(); // Верхний инвентарь (GUI)
-
-        // Проверяем, существует ли инвентарь вообще
-        if (topInventory == null) return;
-
-        // Определяем, какое GUI открыто, используя наши карты
-        if (openWarehouses.containsKey(topInventory)) {
-            handleWarehouseClick(event, topInventory);
-        } else if (openInviteGuis.containsKey(topInventory)) {
-            handleInviteClick(event, player, topInventory);
-        } else if (openRankGuis.containsKey(topInventory)) {
-            handleRanksClick(event, player, topInventory);
-        }
-    }
-
-    /**
-     * Обрабатывает клик в GUI склада.
-     */
-    public void handleWarehouseClick(InventoryClickEvent event, Inventory topInventory) {
-        if (factionManager == null || configManager == null || playerManager == null) {
-            plugin.getLogger().severe("Cannot handle warehouse click: Managers null.");
-            event.setCancelled(true);
+        if (gui == null) {
+            player.sendMessage(Utils.color("&cError opening warehouse GUI."));
             return;
         }
+        openWarehouses.put(gui, faction.getId());
+        player.openInventory(gui);
+    }
 
-        event.setCancelled(true); // Отменяем по умолчанию
+    // --- Обработчики Событий (вызываются из Listener'ов) ---
 
-        int slot = event.getRawSlot();
-        int guiSize = topInventory.getSize();
-        int contentSlots = guiSize - 9;
+    /**
+     * Обрабатывает закрытие любого инвентаря, проверяя, относится ли он к GUI плагина.
+     * Вызывается из InventoryCloseListener.
+     */
+    public void handleInventoryClose(InventoryCloseEvent event) {
+        Inventory inventory = event.getInventory();
+        Player player = (Player) event.getPlayer();
 
-        String factionId = openWarehouses.get(topInventory);
-        if (factionId == null) {
-            plugin.getLogger().warning("Warehouse Faction ID not found for inventory during click for " + player.getName());
-            player.closeInventory();
-            return;
+        // Обработка закрытия склада
+        if (openWarehouses.containsKey(inventory)) {
+            handleWarehouseClose(inventory, player);
+            // Не делаем return, чтобы обработать другие возможные GUI (хотя одновременно открыто одно)
         }
+
+        // Обработка закрытия GUI рангов
+        if (openRankGuis.containsKey(inventory)) {
+            openRankGuis.remove(inventory);
+            plugin.getLogger().fine("Ranks GUI closed for player " + player.getName());
+            // Ничего сохранять не нужно при обычном закрытии рангов
+        }
+
+        // Обработка закрытия GUI приглашений
+        if (openInviteGuis.containsKey(inventory)) {
+            UUID targetUUID = openInviteGuis.remove(inventory);
+            plugin.getLogger().fine("Invite GUI closed by player " + player.getName() + " (Target UUID: " + targetUUID + ")");
+            // Если закрыл не кнопкой, приглашение остается активным до истечения срока
+        }
+    }
+
+    /**
+     * Внутренний метод для обработки закрытия именно склада.
+     */
+    private void handleWarehouseClose(Inventory inventory, Player player) {
+        String factionId = openWarehouses.remove(inventory); // Удаляем из мапы при обработке
+        if (factionId == null) return; // Уже обработано или не наш склад
 
         Faction faction = factionManager.getFaction(factionId);
         if (faction == null) {
-            player.closeInventory();
-            player.sendMessage(configManager.getMessage("faction.disbanded", "&cThe faction warehouse is no longer available."));
+            plugin.getLogger().warning("Faction " + factionId + " not found when closing warehouse for " + player.getName());
             return;
         }
 
-        // --- Клик по кнопкам навигации ---
-        if (slot >= contentSlots && slot < guiSize) {
-            ItemStack clickedItem = event.getCurrentItem();
-            if (clickedItem != null && clickedItem.hasItemMeta() && clickedItem.getItemMeta().hasLocalizedName()) {
-                String buttonId = clickedItem.getItemMeta().getLocalizedName();
-                int currentPage = FactionWarehouseGUI.getCurrentPageFromInventory(topInventory);
-                int totalPages = FactionWarehouseGUI.getTotalPages(faction);
+        plugin.getLogger().fine("Warehouse closed for faction " + factionId + " by " + player.getName() + ". Saving contents...");
 
-                if ("prev_page".equals(buttonId) && currentPage > 1) {
-                    openWarehouseGUI(player, currentPage - 1);
-                } else if ("next_page".equals(buttonId) && currentPage < totalPages) {
-                    openWarehouseGUI(player, currentPage + 1);
-                }
+        ItemStack[] guiContents = inventory.getContents();
+        int contentSlots = 45;
+        ItemStack[] currentWarehouse = faction.getWarehouseContents(); // Получаем текущее состояние (копию)
+        ItemStack[] newWarehouseContents = Arrays.copyOf(currentWarehouse, currentWarehouse.length); // Создаем изменяемую копию
+
+        int currentPage = FactionWarehouseGUI.getCurrentPageFromInventory(inventory);
+        if (currentPage < 1) {
+            plugin.getLogger().warning("Could not determine current page for warehouse of faction " + factionId + " on close. Assuming page 1.");
+            currentPage = 1;
+        }
+
+        int startIndexInFaction = (currentPage - 1) * contentSlots;
+
+        for (int guiSlot = 0; guiSlot < contentSlots; guiSlot++) {
+            int indexInFaction = startIndexInFaction + guiSlot;
+            if (indexInFaction < faction.getWarehouseSize() && indexInFaction < newWarehouseContents.length) {
+                ItemStack item = guiContents[guiSlot];
+                newWarehouseContents[indexInFaction] = (item != null && item.getType() != Material.AIR) ? item.clone() : null;
+            } else {
+                break;
             }
+        }
+
+        // Сравниваем старое и новое содержимое перед сохранением, чтобы не сохранять без изменений
+        if (!Arrays.equals(currentWarehouse, newWarehouseContents)) {
+            faction.setWarehouseContents(newWarehouseContents); // Обновляем содержимое (это пометит фракцию как измененную)
+            factionManager.saveModifiedFactions(); // Сохраняем (можно делать реже)
+            plugin.getLogger().fine("Warehouse contents for faction " + factionId + " saved.");
+        } else {
+            plugin.getLogger().fine("Warehouse contents for faction " + factionId + " were not changed.");
+        }
+        // Удаляем return; отсюда (предупреждение 6)
+    }
+
+
+    /**
+     * Обрабатывает клик в любом инвентаре, проверяя, относится ли он к GUI плагина.
+     * Вызывается из GuiClickListener.
+     */
+    public void handleInventoryClick(InventoryClickEvent event) {
+        Inventory topInventory = event.getView().getTopInventory(); // Верхний инвентарь (GUI)
+        Inventory clickedInventory = event.getClickedInventory(); // Инвентарь, по которому кликнули (может быть верхним или нижним)
+        Player player = (Player) event.getWhoClicked();
+
+        // Если клик вообще не по инвентарю, игнорируем
+        if (clickedInventory == null) {
             return;
         }
 
-        // --- Клик в слоте склада ---
-        if (slot >= 0 && slot < contentSlots) {
-            boolean canDeposit = player.hasPermission("hfactions.faction.warehouse.deposit") || player.hasPermission("hfactions.admin.*");
-            boolean canWithdraw = player.hasPermission("hfactions.faction.warehouse.withdraw") || player.hasPermission("hfactions.admin.*");
-
-            if (!canDeposit || !canWithdraw) {
-                FactionRank rank = playerManager.getPlayerRank(player);
-                if (rank != null) {
-                    List<String> perms = rank.getPermissions();
-                    if (!canDeposit && perms.contains("hfactions.faction.warehouse.deposit")) canDeposit = true;
-                    if (!canWithdraw && perms.contains("hfactions.faction.warehouse.withdraw")) canWithdraw = true;
-                }
+        // --- Обработка клика по Складу ---
+        if (openWarehouses.containsKey(topInventory)) {
+            handleWarehouseClick(event, player, topInventory, clickedInventory);
+            return; // Завершаем обработку, если это был склад
+        }
+        // --- Обработка клика по GUI Рангов ---
+        if (openRankGuis.containsKey(topInventory)) {
+            // Клик должен быть именно в верхнем инвентаре
+            if (topInventory.equals(clickedInventory)) {
+                handleRanksClick(event, player, topInventory);
             }
+            return; // Завершаем обработку
+        }
+        // --- Обработка клика по GUI Приглашений ---
+        if (openInviteGuis.containsKey(topInventory)) {
+            // Клик должен быть именно в верхнем инвентаре
+            if (topInventory.equals(clickedInventory)) {
+                handleInviteClick(event, player, topInventory);
+            }
+            return; // Завершаем обработку
+        }
+
+        // Если это не наше GUI, но клик был в инвентаре игрока, ничего не делаем (разрешаем)
+        // Если клик был в чужом GUI (не нашем), тоже ничего не делаем
+    }
+
+
+    // --- Обработчики кликов для конкретных GUI ---
+
+    private void handleWarehouseClick(InventoryClickEvent event, Player player, Inventory topInventory, Inventory clickedInventory) {
+        event.setCancelled(true); // Отменяем по умолчанию для склада
+
+        int slot = event.getRawSlot(); // Слот в контексте всего окна (0-53 для верха, 54+ для низа)
+        int guiSize = topInventory.getSize(); // 54
+        int contentSlots = guiSize - 9; // 45
+
+        // Клик в верхнем инвентаре
+        if (clickedInventory != null && clickedInventory.equals(topInventory)) {
+            // Клик по кнопкам навигации (45-53)
+            if (slot >= contentSlots && slot < guiSize) {
+                ItemStack clickedItem = event.getCurrentItem();
+                // Проверяем, что это наша кнопка (по localized name)
+                if (clickedItem != null && clickedItem.hasItemMeta()) {
+                    ItemMeta meta = clickedItem.getItemMeta();
+                    if (meta != null && meta.hasLocalizedName()) {
+                        String buttonId = meta.getLocalizedName();
+                        int currentPage = FactionWarehouseGUI.getCurrentPageFromInventory(topInventory);
+                        Faction faction = factionManager.getFaction(openWarehouses.get(topInventory));
+                        if (faction == null) return;
+                        int totalPages = FactionWarehouseGUI.getTotalPages(faction);
+
+                        if ("prev_page".equals(buttonId) && currentPage > 1) {
+                            openWarehouseGUI(player, currentPage - 1);
+                        } else if ("next_page".equals(buttonId) && currentPage < totalPages) {
+                            openWarehouseGUI(player, currentPage + 1);
+                        }
+                    }
+                }
+                return; // Клик по кнопке или рамке обработан
+            }
+
+            // Клик по слоту с содержимым (0-44)
+            // Избыточная проверка `slot < contentSlots` удалена (предупреждение 8)
+            boolean canDeposit = hasPermission(player, "hfactions.faction.warehouse.deposit");
+            boolean canWithdraw = hasPermission(player, "hfactions.faction.warehouse.withdraw");
 
             ItemStack cursorItem = event.getCursor();
             ItemStack clickedSlotItem = event.getCurrentItem();
 
-            // Пытаемся положить предмет
-            if (cursorItem != null && !cursorItem.getType().isAir()) {
+            // Игнорируем предупреждение IDE о cursorItem != null (предупреждение 9)
+            boolean placingItem = cursorItem != null && cursorItem.getType() != Material.AIR;
+            boolean takingItem = clickedSlotItem != null && clickedSlotItem.getType() != Material.AIR;
+            boolean swapping = placingItem && takingItem; // Обмен предметами
+
+            if (swapping) { // Пытается положить предмет в непустой слот (обмен)
+                if (canDeposit && canWithdraw) {
+                    event.setCancelled(false); // Разрешаем обмен
+                } else {
+                    player.sendMessage(Utils.color("&cYou need both deposit and withdraw permissions to swap items."));
+                }
+            } else if (placingItem) { // Пытается положить предмет в пустой слот
                 if (canDeposit) {
-                    event.setCancelled(false);
+                    event.setCancelled(false); // Разрешаем
                 } else {
-                    player.sendMessage(configManager.getMessage("warehouse.no_permission_deposit", "&cNo permission to deposit items."));
+                    player.sendMessage(Utils.color("&cYou don't have permission to deposit items."));
                 }
-            }
-            // Пытаемся взять предмет
-            else if (clickedSlotItem != null && !clickedSlotItem.getType().isAir()) {
+            } else if (takingItem) { // Пытается взять предмет (курсор пуст)
                 if (canWithdraw) {
-                    event.setCancelled(false);
+                    event.setCancelled(false); // Разрешаем
                 } else {
-                    player.sendMessage(configManager.getMessage("warehouse.no_permission_withdraw", "&cNo permission to withdraw items."));
+                    player.sendMessage(Utils.color("&cYou don't have permission to withdraw items."));
                 }
+            } else {
+                // Клик по пустому слоту пустым курсором
+                event.setCancelled(false); // Разрешаем (ничего не произойдет)
             }
-            // Клик по пустому слоту с пустым курсором
-            else {
+        }
+        // Клик в нижнем инвентаре
+        else if (clickedInventory != null && clickedInventory.equals(event.getView().getBottomInventory())) {
+            // Shift-клик из нижнего в верхний
+            if (event.isShiftClick()) {
+                if (hasPermission(player, "hfactions.faction.warehouse.deposit")) {
+                    // Ищем первый пустой слот в видимой части склада
+                    ItemStack itemToMove = event.getCurrentItem();
+                    if (itemToMove != null && itemToMove.getType() != Material.AIR) {
+                        int emptySlot = -1;
+                        for (int i = 0; i < contentSlots; i++) {
+                            if (topInventory.getItem(i) == null || topInventory.getItem(i).getType() == Material.AIR) {
+                                emptySlot = i;
+                                break;
+                            }
+                        }
+                        if (emptySlot != -1) {
+                            event.setCancelled(false); // Разрешаем стандартное поведение (попытку перемещения)
+                        } else {
+                            player.sendMessage(Utils.color("&cThe current warehouse page is full."));
+                            // Оставляем event.setCancelled(true) по умолчанию
+                        }
+                    } else {
+                        event.setCancelled(false); // Разрешаем клик по пустому слоту
+                    }
+                } else {
+                    player.sendMessage(Utils.color("&cYou don't have permission to deposit items using shift-click."));
+                    // Оставляем event.setCancelled(true) по умолчанию
+                }
+            } else {
+                // Обычный клик в нижнем инвентаре - разрешаем
                 event.setCancelled(false);
             }
+        }
+        // Клик вне инвентарей - оставляем отмененным по умолчанию
+    }
+
+    private void handleRanksClick(InventoryClickEvent event, Player player, Inventory topInventory) {
+        event.setCancelled(true); // Запрещаем брать предметы
+
+        int slot = event.getSlot(); // Получаем слот именно в верхнем инвентаре
+        // Проверка клика именно в верхнем инвентаре уже сделана в handleInventoryClick
+
+        ItemStack clickedItem = event.getCurrentItem();
+        // Улучшенная проверка предмета
+        if (clickedItem == null || clickedItem.getType() == Material.AIR || !clickedItem.hasItemMeta()) return;
+        ItemMeta meta = clickedItem.getItemMeta();
+        if (meta == null) return; // На всякий случай
+
+        // Исправленная проверка PersistentData и получение ключа (Ошибка 1)
+        NamespacedKey rankKey = FactionRanksGUI.getRankIdKey(); // Получаем ключ из FactionRanksGUI
+        if (!meta.getPersistentDataContainer().has(rankKey, PersistentDataType.INTEGER)) {
+            plugin.getLogger().fine("Clicked item in ranks GUI does not have the rank ID key.");
+            return; // Не наш предмет ранга
+        }
+
+        Integer rankId = meta.getPersistentDataContainer().get(rankKey, PersistentDataType.INTEGER);
+        // Исправляем имя метода getRankIdFromItem (Ошибка 2) - теперь получаем напрямую
+        // Integer rankId = FactionRanksGUI.getRankIdFromItem(clickedItem); // Старый вариант
+
+        if (rankId == null) {
+            plugin.getLogger().warning("Failed to get rank ID from item NBT in ranks GUI.");
             return;
         }
 
-        // --- Клик в инвентаре игрока ---
-        Inventory clickedInventory = event.getClickedInventory();
-        if (clickedInventory != null && clickedInventory.equals(event.getView().getBottomInventory())) {
-            // Shift-клик
-            if (event.isShiftClick()) {
-                boolean canDeposit = player.hasPermission("hfactions.faction.warehouse.deposit") || player.hasPermission("hfactions.admin.*");
-                if (!canDeposit) {
-                    FactionRank rank = playerManager.getPlayerRank(player);
-                    if (rank != null && rank.getPermissions().contains("hfactions.faction.warehouse.deposit")) canDeposit = true;
-                }
-
-                if (canDeposit) {
-                    ItemStack clickedPlayerItem = event.getCurrentItem(); // Предмет, по которому кликнули в инвентаре игрока
-                    if (clickedPlayerItem != null && !clickedPlayerItem.getType().isAir()) {
-                        // Стандартная логика Shift-клика попытается переместить предмет. Разрешаем.
-                        event.setCancelled(false);
-                    } else {
-                        // Кликнули по пустому слоту или shift-клик без предмета - отменяем
-                        event.setCancelled(true);
-                    }
-                } else {
-                    player.sendMessage(configManager.getMessage("warehouse.no_permission_deposit", "&cNo permission to deposit items."));
-                    event.setCancelled(true); // Отменяем, т.к. прав нет
-                }
-            }
-            // Обычный клик
-            else {
-                event.setCancelled(false); // Разрешаем обычные клики в инвентаре игрока
-            }
+        String factionId = openRankGuis.get(topInventory);
+        if (factionId == null) {
+            plugin.getLogger().severe("FATAL: openRankGuis map does not contain inventory for ranks click!");
+            player.closeInventory();
             return;
+        }
+
+        if (!hasPermission(player, "hfactions.faction.manage_ranks")) {
+            player.sendMessage(Utils.color("&cYou do not have permission to manage ranks."));
+            player.closeInventory();
+            return;
+        }
+
+        // --- Запрос имени через Conversation API ---
+        if (event.isLeftClick()) {
+            player.closeInventory();
+            // TODO: Реализовать Conversation API для запроса нового имени
+            // Пример вызова (нужен ConversationFactory и ConversationAbandonedListener)
+            // ConversationFactory factory = new ConversationFactory(plugin);
+            // Conversation conversation = factory.withFirstPrompt(new RankRenamePrompt(plugin, factionId, rankId))
+            //                                   .withLocalEcho(false)
+            //                                   .withTimeout(30) // 30 секунд на ввод
+            //                                   .buildConversation(player);
+            // conversation.begin();
+            player.sendMessage(Utils.color("&e[TEMP] Enter new name for rank " + rankId + " in chat (Conversation API needed)."));
+            // Временное решение: просто показываем текущее имя или дефолтное
+            FactionRank rank = factionManager.getFaction(factionId).getRank(rankId);
+            if (rank != null) {
+                String currentName = rank.getDisplayName() != null ? rank.getDisplayName() : rank.getDefaultName();
+                player.sendMessage(Utils.color("&7Current name: " + currentName));
+            }
+
+
+        } else if (event.isRightClick()) {
+            factionManager.resetRankDisplayName(factionId, rankId);
+            player.sendMessage(Utils.color("&aDisplay name for rank " + rankId + " reset to default."));
+            openRanksGUI(player); // Переоткрываем для обновления
         }
     }
 
-
-    /**
-     * Обрабатывает клик в GUI приглашения.
-     */
     private void handleInviteClick(InventoryClickEvent event, Player player, Inventory topInventory) {
-        event.setCancelled(true);
-        if (playerManager == null || configManager == null || factionManager == null) return;
+        event.setCancelled(true); // Запрещаем брать предметы
 
+        int slot = event.getSlot();
+        // Проверка клика в верхнем инвентаре уже сделана
+
+        ItemStack clickedItem = event.getCurrentItem();
+        if (clickedItem == null || !clickedItem.hasItemMeta()) return;
+        ItemMeta meta = clickedItem.getItemMeta();
+        if (meta == null || !meta.hasLocalizedName()) return; // Используем localizedName для идентификации кнопок
+
+        String action = meta.getLocalizedName();
         UUID targetUUID = openInviteGuis.get(topInventory);
+
         if (targetUUID == null || !targetUUID.equals(player.getUniqueId())) {
+            plugin.getLogger().warning("Invite GUI click mismatch: Clicker " + player.getName() + ", Expected target UUID " + targetUUID);
+            player.closeInventory();
+            openInviteGuis.remove(topInventory); // Убираем невалидное GUI
             return;
         }
 
         PendingInvite invite = playerManager.getInvite(player);
         if (invite == null) {
+            player.sendMessage(Utils.color("&cThis faction invite is no longer valid or has expired."));
             player.closeInventory();
-            player.sendMessage(configManager.getMessage("faction.invite_invalid", "&cThis faction invite is no longer valid."));
+            openInviteGuis.remove(topInventory);
             return;
         }
 
-        ItemStack clickedItem = event.getCurrentItem();
-        if (clickedItem == null || !clickedItem.hasItemMeta() || !clickedItem.getItemMeta().hasLocalizedName()) {
-            return;
-        }
-
-        String action = clickedItem.getItemMeta().getLocalizedName();
+        // --- Обработка действий ---
+        player.closeInventory(); // Закрываем в любом случае
+        openInviteGuis.remove(topInventory); // Убираем из мапы
+        playerManager.removeInvite(player); // Удаляем само приглашение
 
         if ("accept_invite".equals(action)) {
-            player.closeInventory(); // Закрываем ДО выполнения действий
-            Faction factionToJoin = factionManager.getFaction(invite.getFactionId());
-            if (factionToJoin != null) {
-                playerManager.joinFaction(player, factionToJoin);
-            } else {
-                player.sendMessage(configManager.getMessage("faction.invite_faction_deleted", "&cThe faction you were invited to no longer exists."));
+            Faction faction = factionManager.getFaction(invite.getFactionId());
+            Player inviter = Bukkit.getPlayer(invite.getInviterUUID());
+
+            if (faction == null) {
+                player.sendMessage(Utils.color("&cThe faction you tried to join no longer exists."));
+                if (inviter != null && inviter.isOnline()) inviter.sendMessage(Utils.color("&c" + player.getName() + " could not join your faction as it no longer exists."));
+                return;
             }
-            playerManager.removeInvite(player); // Удаляем приглашение после обработки
+            if (playerManager.isInFaction(player)) {
+                player.sendMessage(Utils.color("&cYou are already in a faction. Leave it first to accept the invite."));
+                if (inviter != null && inviter.isOnline()) inviter.sendMessage(Utils.color("&c" + player.getName() + " could not accept your invite because they are already in a faction."));
+                return;
+            }
+
+            boolean joined = playerManager.joinFaction(player, faction);
+            if (inviter != null && inviter.isOnline()) {
+                inviter.sendMessage(Utils.color(joined ? "&a" + player.getName() + " has accepted your invite and joined the faction!" : "&c" + player.getName() + " tried to accept your invite but failed to join."));
+            }
+
         } else if ("decline_invite".equals(action)) {
-            player.closeInventory();
-            playerManager.removeInvite(player);
-            player.sendMessage(configManager.getMessage("faction.invite_declined", "&eYou declined the faction invite from {inviter_name}.")
-                    .replace("{inviter_name}", invite.getInviterName()));
+            player.sendMessage(Utils.color("&eYou have declined the faction invite."));
             Player inviter = Bukkit.getPlayer(invite.getInviterUUID());
             if (inviter != null && inviter.isOnline()) {
-                inviter.sendMessage(configManager.getMessage("faction.invite_was_declined", "&e{target_name} declined your faction invite.")
-                        .replace("{target_name}", player.getName()));
-            }
-        }
-    }
-
-    /**
-     * Обрабатывает клик в GUI управления рангами.
-     */
-    private void handleRanksClick(InventoryClickEvent event, Player player, Inventory topInventory) {
-        event.setCancelled(true);
-        if (playerManager == null || factionManager == null || configManager == null || conversationManager == null) return;
-
-        String factionId = openRankGuis.get(topInventory);
-        Faction faction = playerManager.getPlayerFaction(player);
-        if (factionId == null || faction == null || !factionId.equals(faction.getId())) {
-            player.closeInventory();
-            return;
-        }
-
-        ItemStack clickedItem = event.getCurrentItem();
-        if (clickedItem == null || clickedItem.getType() == Material.AIR || !clickedItem.hasItemMeta()) {
-            return;
-        }
-
-        int rankId = -1;
-        String localizedName = clickedItem.getItemMeta().getLocalizedName();
-        if (localizedName != null) {
-            try {
-                rankId = Integer.parseInt(localizedName); // Получаем ID ранга из LocalizedName
-            } catch (NumberFormatException e) { /* ignore */ }
-        }
-
-        if (rankId == -1) return;
-
-        FactionRank clickedRank = faction.getRank(rankId);
-        if (clickedRank == null) return;
-
-        // Проверяем права на управление рангами ОДИН РАЗ
-        boolean canManageRanks = player.hasPermission("hfactions.faction.manage_ranks");
-        if (!canManageRanks) {
-            FactionRank playerRank = playerManager.getPlayerRank(player);
-            if (playerRank != null && playerRank.getPermissions().contains("hfactions.faction.manage_ranks")) {
-                canManageRanks = true;
-            }
-        }
-        if (!canManageRanks) {
-            player.sendMessage(configManager.getMessage("ranks.no_permission_manage", "&cYou do not have permission to manage ranks."));
-            return;
-        }
-
-
-        // --- Обработка ЛКМ (Изменить имя) ---
-        if (event.isLeftClick()) {
-            player.closeInventory(); // Закрываем GUI
-            // Используем ConversationManager
-            conversationManager.startRankRenameConversation(player, factionId, rankId);
-            player.sendMessage(configManager.getMessage("ranks.enter_new_name", "&aEnter the new display name for rank {rank_id} ({rank_name}) in chat, or type 'cancel'.")
-                    .replace("{rank_id}", String.valueOf(rankId))
-                    .replace("{rank_name}", clickedRank.getDisplayName()));
-        }
-        // --- Обработка ПКМ (Сбросить имя) ---
-        else if (event.isRightClick()) {
-            if (clickedRank.getDisplayName() != null && !clickedRank.getDisplayName().equals(clickedRank.getDefaultName())) {
-                factionManager.resetRankDisplayName(factionId, rankId); // Сбрасываем имя
-                player.sendMessage(configManager.getMessage("ranks.name_reset", "&aDisplay name for rank {rank_id} reset to default.")
-                        .replace("{rank_id}", String.valueOf(rankId)));
-                // Переоткрываем GUI для обновления
-                openRanksGUI(player); // Открываем заново
-            } else {
-                player.sendMessage(configManager.getMessage("ranks.name_already_default", "&eRank name is already set to default."));
+                inviter.sendMessage(Utils.color("&c" + player.getName() + " has declined your faction invite."));
             }
         }
     }
 
 
-    /**
-     * Обрабатывает закрытие инвентаря склада. Вызывается из InventoryCloseListener.
-     */
-    public void handleWarehouseClose(InventoryCloseEvent event) {
-        if (!(event.getPlayer() instanceof Player)) return; // Убедимся, что это игрок
-        Player player = (Player) event.getPlayer();
-        Inventory inventory = event.getInventory();
+    // --- Вспомогательный метод для проверки прав (учитывает ранг) ---
+    private boolean hasPermission(Player player, String permission) {
+        if (player == null || permission == null || permission.isEmpty()) {
+            return false;
+        }
+        // Сначала проверяем прямое право
+        if (player.hasPermission(permission)) {
+            return true;
+        }
+        // Затем проверяем права ранга
+        FactionRank rank = playerManager.getPlayerRank(player);
+        // Убедимся, что ранк не null и его список прав не null перед проверкой
+        return rank != null && rank.getPermissions() != null && rank.getPermissions().contains(permission);
+    }
 
-        // Обработка закрытия СКЛАДА
-        if (openWarehouses.containsKey(inventory)) {
-            String factionId = openWarehouses.remove(inventory);
-            if (factionManager == null || factionId == null || configManager == null) return;
+    // Метод для добавления таймаута приглашения (вызывается из команды invite)
+    public void addInviteTimeout(Player target, PendingInvite invite) {
+        long expireTicks = configManager.getConfig().getLong("faction.invite_expire_seconds", 60) * 20L;
+        if (expireTicks <= 0) expireTicks = 60 * 20L; // Минимум 60 секунд
 
-            Faction faction = factionManager.getFaction(factionId);
-            if (faction == null) {
-                plugin.getLogger().warning("Faction " + factionId + " not found when closing warehouse for " + player.getName());
-                return;
-            }
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            PendingInvite currentInvite = playerManager.getInvite(target); // Получаем текущее приглашение
+            // Удаляем только если это ТО ЖЕ САМОЕ приглашение (на случай, если его уже приняли/отклонили)
+            // Сравнение по содержимому, если equals переопределен в PendingInvite, иначе по ссылке
+            boolean isSameInvite = (currentInvite != null && currentInvite.equals(invite));
+            // Или если equals не переопределен, сравниваем поля:
+            // boolean isSameInvite = (currentInvite != null
+            //                      && currentInvite.getInviterUUID().equals(invite.getInviterUUID())
+            //                      && currentInvite.getFactionId().equals(invite.getFactionId()));
 
-            plugin.getLogger().fine("Warehouse closed for faction " + factionId + " by " + player.getName() + ". Saving contents...");
-
-            ItemStack[] guiContentsPage = new ItemStack[45];
-            for (int i = 0; i < 45; i++) {
-                guiContentsPage[i] = inventory.getItem(i);
-            }
-
-            int closedPage = FactionWarehouseGUI.getCurrentPageFromInventory(inventory);
-            if (closedPage <= 0) {
-                plugin.getLogger().severe("Could not determine page number for closed warehouse of faction " + factionId + ". Contents NOT saved!");
-                player.sendMessage(Utils.color("&cError saving warehouse contents (invalid page). Contact admin.")); // Сообщаем игроку
-                return;
-            }
-
-            ItemStack[] currentFactionContents = faction.getWarehouseContents();
-            ItemStack[] finalContents = (currentFactionContents != null && currentFactionContents.length == faction.getWarehouseSize())
-                    ? currentFactionContents : new ItemStack[faction.getWarehouseSize()];
-
-            int startIndexInFaction = (closedPage - 1) * 45;
-            for (int i = 0; i < 45; i++) {
-                int indexInFaction = startIndexInFaction + i;
-                if (indexInFaction < finalContents.length) {
-                    finalContents[indexInFaction] = guiContentsPage[i];
-                } else {
-                    break;
+            if (isSameInvite) {
+                playerManager.removeInvite(target); // Удаляем из менеджера
+                if (target.isOnline()) {
+                    target.sendMessage(Utils.color("&cThe faction invite from " + invite.getInviterName() + " has expired."));
+                    // Закрываем GUI, если оно еще открыто для этого приглашения
+                    Inventory openInv = target.getOpenInventory().getTopInventory();
+                    if (openInv != null && openInviteGuis.containsKey(openInv) && openInviteGuis.get(openInv).equals(target.getUniqueId())) {
+                        target.closeInventory();
+                        openInviteGuis.remove(openInv); // Убираем из мапы после закрытия
+                    }
                 }
             }
-
-            faction.setWarehouseContents(finalContents);
-            factionManager.markFactionAsModified(factionId); // Помечаем для автосохранения
-
-            player.sendMessage(configManager.getMessage("warehouse.saved", "&aFaction warehouse contents saved."));
-        }
-        // Обработка закрытия других GUI
-        else if (openInviteGuis.containsKey(inventory)) {
-            openInviteGuis.remove(inventory);
-        } else if (openRankGuis.containsKey(inventory)) {
-            openRankGuis.remove(inventory);
-            // Отменяем беседу переименования, если игрок закрыл GUI рангов
-            if (conversationManager != null) {
-                conversationManager.cancelRenameConversation(player.getUniqueId());
-            }
-        }
+        }, expireTicks);
     }
-
-} // Конец класса GuiManager
+}

@@ -219,4 +219,7 @@ public class ItemManager {
         // Проверяем наличие ключа в PersistentDataContainer
         return meta != null && meta.getPersistentDataContainer().has(key, PersistentDataType.BYTE);
     }
+
+    public ItemStack getManagedItem(String resultItemId) {
+    }
 }

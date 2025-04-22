@@ -1,11 +1,11 @@
 package org.isyateq.hfactions.util;
 
-import org.bukkit.ChatColor;
+import org.bukkit.ChatColor; // Импорт ChatColor
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.io.BukkitObjectInputStream;
 import org.bukkit.util.io.BukkitObjectOutputStream;
-import org.isyateq.hfactions.HFactions;
-import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder; // Используем встроенный в Bukkit/Spigot кодер
+import org.isyateq.hfactions.HFactions; // Импорт HFactions для доступа к логгеру
+import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -14,36 +14,46 @@ import java.util.logging.Level;
 
 public class Utils {
 
-    // ... (остальные ваши методы в Utils) ...
-
     /**
      * Сериализует массив ItemStack в строку Base64.
      * @param items Массив ItemStack для сериализации.
-     * @return Строка Base64 или null в случае ошибки.
+     * @return Строка Base64 или null в случае ошибки или пустого массива.
      */
     public static String itemStackArrayToBase64(ItemStack[] items) {
-        if (items == null) {
-            return null; // Или вернуть пустую строку? Решите сами.
+        if (items == null) { // Считаем null массив как пустой для сохранения
+            return null;
         }
-        try {
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            BukkitObjectOutputStream dataOutput = new BukkitObjectOutputStream(outputStream);
+        // Проверка, действительно ли есть что сохранять (не все null)
+        boolean hasItems = false;
+        for (ItemStack item : items) {
+            if (item != null) {
+                hasItems = true;
+                break;
+            }
+        }
+        if (!hasItems && items.length > 0) { // Если массив не пустой, но все элементы null
+            return null; // Не сохраняем строку для полностью пустого склада
+        }
 
-            // Записываем размер массива, чтобы знать, сколько читать при десериализации
-            dataOutput.writeInt(items.length);
 
-            // Записываем каждый предмет
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+             BukkitObjectOutputStream dataOutput = new BukkitObjectOutputStream(outputStream)) {
+
+            dataOutput.writeInt(items.length); // Записываем размер
+
             for (ItemStack item : items) {
-                dataOutput.writeObject(item); // BukkitObjectOutputStream умеет сериализовать ItemStack
+                dataOutput.writeObject(item); // Сериализуем (null тоже запишется)
             }
 
-            // Закрываем поток и кодируем в Base64
-            dataOutput.close();
+            // dataOutput закроется автоматически try-with-resources
             return Base64Coder.encodeLines(outputStream.toByteArray());
+
         } catch (IOException e) {
-            // Логируем ошибку - важно!
             HFactions.getInstance().getLogger().log(Level.SEVERE, "Could not serialize ItemStack array to Base64", e);
-            return null; // Возвращаем null при ошибке
+            return null;
+        } catch (Exception e) { // Ловим другие возможные ошибки сериализации
+            HFactions.getInstance().getLogger().log(Level.SEVERE, "Unexpected error serializing ItemStack array", e);
+            return null;
         }
     }
 
@@ -58,36 +68,55 @@ public class Utils {
         }
         try {
             byte[] data = Base64Coder.decodeLines(base64Data);
-            ByteArrayInputStream inputStream = new ByteArrayInputStream(data);
-            BukkitObjectInputStream dataInput = new BukkitObjectInputStream(inputStream);
-
-            // Читаем размер массива
-            int size = dataInput.readInt();
-            if (size < 0) { // Проверка на невалидный размер
-                dataInput.close();
-                throw new IOException("Invalid array size read from Base64 data: " + size);
+            if (data.length == 0) {
+                return null; // Ошибка декодирования
             }
 
-            ItemStack[] items = new ItemStack[size];
+            try (ByteArrayInputStream inputStream = new ByteArrayInputStream(data);
+                 BukkitObjectInputStream dataInput = new BukkitObjectInputStream(inputStream)) {
 
-            // Читаем каждый предмет
-            for (int i = 0; i < size; i++) {
-                items[i] = (ItemStack) dataInput.readObject(); // Читаем объект ItemStack
-            }
+                int size = dataInput.readInt();
+                if (size < 0) {
+                    throw new IOException("Invalid array size read from Base64 data: " + size);
+                }
+                // Проверка на слишком большой размер (защита от OOM)
+                if (size > 10000) { // Условный лимит, настройте по необходимости
+                    throw new IOException("Attempted to deserialize excessively large ItemStack array: " + size);
+                }
 
-            dataInput.close();
-            return items;
+
+                ItemStack[] items = new ItemStack[size];
+
+                for (int i = 0; i < size; i++) {
+                    // Читаем объект, он может быть null
+                    Object obj = dataInput.readObject();
+                    if (obj != null && !(obj instanceof ItemStack)) {
+                        // Логируем предупреждение, если объект не ItemStack, но не прерываем весь процесс
+                        HFactions.getInstance().getLogger().warning("Non-ItemStack object found during deserialization at index " + i + ": " + obj.getClass().getName() + ". Skipping.");
+                        items[i] = null; // Записываем null в массив
+                    } else {
+                        items[i] = (ItemStack) obj;
+                    }
+                }
+                // dataInput закроется автоматически
+
+                return items;
+            } // Конец try-with-resources для потоков ввода
+
         } catch (IOException | ClassNotFoundException | ClassCastException e) {
-            // Логируем ошибку
             HFactions.getInstance().getLogger().log(Level.SEVERE, "Could not deserialize ItemStack array from Base64", e);
-            // Возвращаем пустой массив нужного размера или null? Лучше null, чтобы показать ошибку.
+            return null;
+        } catch (Exception e) { // Ловим другие возможные ошибки
+            HFactions.getInstance().getLogger().log(Level.SEVERE, "Unexpected error deserializing ItemStack array", e);
             return null;
         }
     }
 
-    // --- Метод для форматирования цвета (у вас он уже может быть) ---
+    // --- Метод для форматирования цвета ---
     public static String color(String message) {
+        if (message == null) return "";
         return ChatColor.translateAlternateColorCodes('&', message);
     }
 
+    // Другие утилиты...
 }

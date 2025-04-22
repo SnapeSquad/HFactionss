@@ -1,28 +1,18 @@
 package org.isyateq.hfactions;
 
-// Bukkit/Paper API
-import org.bukkit.Bukkit;
-import org.bukkit.conversations.Conversation;
-import org.bukkit.plugin.RegisteredServiceProvider;
-import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.plugin.PluginManager;
-
-// Vault & LuckPerms API
+// ... другие импорты ...
 import net.luckperms.api.LuckPerms;
 import net.milkbowl.vault.economy.Economy;
-
-// HFactions Components
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.java.JavaPlugin;
 import org.isyateq.hfactions.commands.FactionCommand;
-import org.isyateq.hfactions.integrations.DynmapIntegration;
-import org.isyateq.hfactions.integrations.LuckPermsIntegration;
-import org.isyateq.hfactions.integrations.OraxenIntegration;
-import org.isyateq.hfactions.integrations.VaultIntegration;
-import org.isyateq.hfactions.listeners.*; // Импортируем все слушатели из пакета
-import org.isyateq.hfactions.managers.*; // Импортируем все менеджеры
-import org.isyateq.hfactions.tasks.CuffLeashTask; // Импортируем задачи, если они в tasks
-import org.isyateq.hfactions.tasks.PaydayTask;
+import org.isyateq.hfactions.listeners.*; // Импорт всех листенеров
+import org.isyateq.hfactions.managers.*; // Импорт всех менеджеров
+import org.isyateq.hfactions.tasks.CuffLeashTask; // Пример импорта задачи
+import org.isyateq.hfactions.tasks.PaydayTask;    // Пример импорта задачи
+import org.isyateq.hfactions.integrations.*; // Импорт интеграций
 
-// Java Utilities
 import java.util.Objects;
 import java.util.logging.Level;
 
@@ -40,51 +30,65 @@ public final class HFactions extends JavaPlugin {
     private CuffManager cuffManager;
     private ItemManager itemManager;
     private CraftingManager craftingManager;
-    private ConversationManager conversationManager;
+    private DynmapManager dynmapManager; // Если Dynmap опционален, может быть null
 
-    // Интеграции
-    private VaultIntegration vaultIntegration;
-    private LuckPermsIntegration luckPermsIntegration;
-    private DynmapIntegration dynmapIntegration;
-    private OraxenIntegration oraxenIntegration;
-    private HFactions plugin;
+    // Интеграции (API)
+    private VaultIntegration vaultIntegration; // Может быть null
+    private LuckPermsIntegration luckPermsIntegration; // Должен быть не null
+    private OraxenIntegration oraxenIntegration; // Может быть null
 
     @Override
     public void onEnable() {
         instance = this;
+        long startTime = System.currentTimeMillis();
         getLogger().info("===================================");
         getLogger().info("Enabling HFactions v" + getDescription().getVersion());
 
-        // 1. Инициализация Базы Данных
+        // 1. Инициализация Базы Данных (Первым делом)
         getLogger().info("Initializing database...");
-        databaseManager = new DatabaseManager(this);
+        try {
+            databaseManager = new DatabaseManager(this);
+            // Попытка получить соединение для создания/проверки таблицы
+            databaseManager.getConnection();
+        } catch (Exception e) {
+            getLogger().log(Level.SEVERE, "Failed to initialize database! Disabling plugin.", e);
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
 
         // 2. Загрузка Конфигурации
         getLogger().info("Loading configurations...");
         configManager = new ConfigManager(this);
-        configManager.loadConfigs();
+        configManager.loadConfigs(); // Загружает config.yml, factions.yml, territories.yml
 
         // 3. Инициализация Менеджеров
         getLogger().info("Initializing managers...");
-        factionManager = new FactionManager(this); // FactionManager первым
-        playerManager = new PlayerManager(this);   // PlayerManager после FactionManager
+        // PlayerManager и FactionManager зависят от DB и Config
+        playerManager = new PlayerManager(this);
+        factionManager = new FactionManager(this);
+        // Остальные менеджеры
         guiManager = new GuiManager(this);
         cuffManager = new CuffManager(this);
         itemManager = new ItemManager(this);
         craftingManager = new CraftingManager(this);
-        conversationManager = new ConversationManager(this);
+        this.dynmapManager = new DynmapManager(this);
+        // DynmapManager инициализируется в setupDynmap
 
-        // 4. Загрузка Данных (фракции, рецепты)
-        getLogger().info("Loading data...");
-        if (factionManager != null) factionManager.loadFactions(); else getLogger().severe("FactionManager is null!");
-        if (craftingManager != null) craftingManager.loadRecipes(); else getLogger().severe("CraftingManager is null!");
+        // 4. Загрузка Данных Фракций (Игроки загружаются при входе)
+        getLogger().info("Loading faction data...");
+        factionManager.loadFactions();
 
         // 5. Настройка Зависимостей и Интеграций
         getLogger().info("Setting up integrations...");
-        setupVault();
-        setupLuckPerms();
-        setupDynmap(); // Загрузит территории, если успешно
-        setupOraxen();
+        setupVault(); // Vault может быть опциональным для некоторых функций
+        if (!setupLuckPerms()) { // LuckPerms обязателен
+            getLogger().severe("LuckPerms integration failed! Disabling plugin.");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+        setupDynmap(); // Опционально
+        setupOraxen(); // Опционально
 
         // 6. Регистрация Команд
         getLogger().info("Registering commands...");
@@ -94,247 +98,225 @@ public final class HFactions extends JavaPlugin {
         getLogger().info("Registering listeners...");
         registerListeners();
 
-        // 8. Загрузка данных для уже онлайн игроков (если был /reload)
+        // 8. Загрузка данных для уже онлайн игроков (важно после инициализации всего)
         getLogger().info("Loading data for online players...");
-        if (playerManager != null) {
-            playerManager.loadDataForOnlinePlayers();
-        } else {
-            getLogger().severe("PlayerManager is null! Cannot load data for online players.");
-        }
+        playerManager.loadDataForOnlinePlayers();
 
         // 9. Запуск Задач
         getLogger().info("Scheduling tasks...");
         scheduleTasks();
 
-        getLogger().info("HFactions has been enabled successfully!");
+        long endTime = System.currentTimeMillis();
+        getLogger().info("HFactions has been enabled successfully! (" + (endTime - startTime) + "ms)");
         getLogger().info("===================================");
     }
 
     @Override
     public void onDisable() {
+        long startTime = System.currentTimeMillis();
         getLogger().info("===================================");
         getLogger().info("Disabling HFactions v" + getDescription().getVersion());
 
-        // Сохранение данных для онлайн игроков (синхронно)
-        getLogger().info("Saving data for online players...");
-        if (playerManager != null) {
-            playerManager.saveDataForOnlinePlayers();
-        }
-
-        // Сохранение измененных фракций (синхронно)
-        getLogger().info("Saving modified faction data...");
-        if (factionManager != null) {
-            factionManager.saveAllFactions(); // Сохраняем все при выключении
-        }
-
-        // Сохранение территорий Dynmap
-        if (dynmapIntegration != null && dynmapIntegration.getDynmapManager() != null) {
-            getLogger().info("Saving Dynmap territories...");
-            dynmapIntegration.getDynmapManager().saveTerritories();
-        }
-
-        // Остановка задач
+        // Остановка задач (в первую очередь, чтобы не мешали сохранению)
         getLogger().info("Stopping tasks...");
         Bukkit.getScheduler().cancelTasks(this);
 
-        // Закрытие соединения с БД
+        // Сохранение данных для онлайн игроков (СИНХРОННО)
+        getLogger().info("Saving data for online players...");
+        if (playerManager != null) {
+            playerManager.saveDataForOnlinePlayers();
+        } else {
+            getLogger().warning("PlayerManager was null during disable, player data might not be saved!");
+        }
+
+        // Сохранение измененных данных фракций (СИНХРОННО)
+        getLogger().info("Saving modified faction data...");
+        if (factionManager != null) {
+            factionManager.saveModifiedFactions(); // Сохраняем то, что не успело автосохранение
+        } else {
+            getLogger().warning("FactionManager was null during disable, faction data might not be saved!");
+        }
+
+        // Сохранение территорий Dynmap (если нужно)
+        if (dynmapManager != null && dynmapManager.isDynmapEnabled()) {
+            getLogger().info("Saving Dynmap territories...");
+            dynmapManager.saveTerritories(); // Сохраняем в territories.yml
+        }
+
+        // Закрытие соединения с БД (ВАЖНО)
         getLogger().info("Closing database connection...");
         if (databaseManager != null) {
             databaseManager.closeConnection();
+        } else {
+            getLogger().warning("DatabaseManager was null during disable.");
         }
 
-        getLogger().info("HFactions has been disabled.");
+
+        long endTime = System.currentTimeMillis();
+        getLogger().info("HFactions has been disabled. (" + (endTime - startTime) + "ms)");
         getLogger().info("===================================");
-        instance = null;
+        instance = null; // Очистка инстанса
     }
 
-    // --- Регистрация Команд ---
     private void registerCommands() {
         try {
+            // Получаем команду из plugin.yml
+            var pluginCommand = getCommand("hfactions"); // Используем var для краткости
+            if (pluginCommand == null) {
+                getLogger().severe("Command 'hfactions' NOT FOUND in plugin.yml! Commands will not work.");
+                return;
+            }
+            // Создаем экземпляр обработчика
             FactionCommand factionCommandExecutor = new FactionCommand(this);
-            // getCommand() может вернуть null, если команда не описана в plugin.yml
-            Objects.requireNonNull(getCommand("hfactions"), "Command 'hfactions' not found in plugin.yml!")
-                    .setExecutor(factionCommandExecutor);
-            // Устанавливаем TabCompleter для той же команды
-            Objects.requireNonNull(getCommand("hfactions"), "Command 'hfactions' not found in plugin.yml!")
-                    .setTabCompleter(factionCommandExecutor);
-            getLogger().info("Command /hfactions registered.");
-        } catch (NullPointerException e) {
-            getLogger().log(Level.SEVERE, "Failed to register command 'hfactions'. Check plugin.yml!", e);
-        } catch (Exception e) {
-            getLogger().log(Level.SEVERE, "An unexpected error occurred while registering commands.", e);
+            // Назначаем исполнителя и автодополнителя
+            pluginCommand.setExecutor(factionCommandExecutor);
+            pluginCommand.setTabCompleter(factionCommandExecutor);
+            getLogger().info("Command 'hfactions' registered successfully.");
+        } catch (Exception e) { // Ловим любые ошибки при регистрации
+            getLogger().log(Level.SEVERE, "Failed to register command 'hfactions'.", e);
         }
     }
 
-    // --- Регистрация Слушателей ---
+
     private void registerListeners() {
-        try {
-            PluginManager pm = getServer().getPluginManager();
-            pm.registerEvents(new PlayerJoinQuitListener(this), this);
-            pm.registerEvents(new GuiClickListener(this), this);
-            pm.registerEvents(new PlayerChatListener(this), this);
-            pm.registerEvents(new InventoryCloseListener(this), this);
-            pm.registerEvents(new TaserListener(this), this);
-            pm.registerEvents(new HandcuffListener(this), this);
-            pm.registerEvents(new ProtocolListener(this), this);
-            pm.registerEvents(new CraftingListener(this), this);
-            getLogger().info("Listeners registered.");
-        } catch (Exception e) {
-            getLogger().log(Level.SEVERE, "An unexpected error occurred while registering listeners.", e);
+        // Регистрируем основные слушатели
+        getServer().getPluginManager().registerEvents(new PlayerJoinQuitListener(this), this);
+        getServer().getPluginManager().registerEvents(new GuiClickListener(this), this);
+        getServer().getPluginManager().registerEvents(new InventoryCloseListener(this), this);
+        getServer().getPluginManager().registerEvents(new PlayerChatListener(this), this); // Для фракц. чата и ввода имени ранга
+
+        // Слушатели механик
+        getServer().getPluginManager().registerEvents(new TaserListener(this), this);
+        getServer().getPluginManager().registerEvents(new HandcuffListener(this), this);
+        getServer().getPluginManager().registerEvents(new ProtocolListener(this), this); // Для штрафов через предмет
+
+        // Слушатель крафта
+        getServer().getPluginManager().registerEvents(new CraftingListener(this), this);
+
+        getLogger().info("All listeners registered.");
+    }
+
+    private void scheduleTasks() {
+        // Payday Task
+        if (configManager.getConfig().getBoolean("payday.enabled", true)) {
+            long intervalMinutes = configManager.getConfig().getLong("payday.interval_minutes", 60);
+            if (intervalMinutes > 0) {
+                long intervalTicks = intervalMinutes * 60 * 20;
+                new PaydayTask(this).runTaskTimer(this, intervalTicks, intervalTicks);
+                getLogger().info("Payday task scheduled every " + intervalMinutes + " minutes.");
+            } else {
+                getLogger().warning("Payday interval is invalid (" + intervalMinutes + "), task not scheduled.");
+            }
+        } else {
+            getLogger().info("Payday task is disabled in config.");
         }
+
+        // Cuff Leash Task (запускается при надевании наручников из CuffManager)
+        // new CuffLeashTask(this).runTaskTimer(this, 20L, 20L); // Запускать по таймеру НЕ НУЖНО!
+
+        // Faction Auto-Save Task
+        long autoSaveIntervalSeconds = configManager.getConfig().getLong("factions.auto_save_interval_seconds", 300); // 5 минут по умолчанию
+        if (autoSaveIntervalSeconds > 0) {
+            factionManager.startAutoSaveTask(autoSaveIntervalSeconds * 20L);
+        } else {
+            getLogger().info("Faction auto-save is disabled (interval <= 0).");
+        }
+
     }
 
     // --- Методы настройки интеграций ---
 
-    private void setupVault() {
+    private boolean setupVault() {
         if (getServer().getPluginManager().getPlugin("Vault") == null) {
-            getLogger().info("Vault not found. Economy features disabled.");
-            vaultIntegration = null; // Явно ставим в null
-            return;
+            getLogger().warning("Vault not found! Economy features (payday, fines, deposit/withdraw) will be disabled.");
+            return false;
         }
         RegisteredServiceProvider<Economy> rsp = getServer().getServicesManager().getRegistration(Economy.class);
         if (rsp == null) {
-            getLogger().warning("Vault found, but no Economy provider found! Economy features disabled.");
-            vaultIntegration = null;
-            return;
+            getLogger().warning("Vault found, but no Economy provider found! Economy features will be disabled.");
+            return false;
         }
-        try {
-            Economy econ = rsp.getProvider();
-            this.vaultIntegration = new VaultIntegration(econ);
-            getLogger().info("Vault & Economy hooked successfully!");
-        } catch (Exception e) {
-            getLogger().log(Level.SEVERE, "Error initializing Vault integration", e);
-            vaultIntegration = null;
+        Economy econ = rsp.getProvider();
+        if (econ == null) {
+            getLogger().warning("Vault Economy provider is null! Economy features will be disabled.");
+            return false;
         }
+        this.vaultIntegration = new VaultIntegration(econ);
+        getLogger().info("Vault & Economy hooked successfully!");
+        return true;
     }
 
-    private void setupLuckPerms() {
+    private boolean setupLuckPerms() {
         RegisteredServiceProvider<LuckPerms> provider = Bukkit.getServicesManager().getRegistration(LuckPerms.class);
-        if (provider == null) {
-            if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
-                getLogger().severe("LuckPerms found, but API not registered! Permissions WILL NOT WORK.");
-            } else {
-                getLogger().severe("LuckPerms not found! Permissions WILL NOT WORK.");
-            }
-            luckPermsIntegration = null;
-            return;
+        // Проверяем и наличие плагина, и сервис провайдера
+        if (provider == null || getServer().getPluginManager().getPlugin("LuckPerms") == null) {
+            getLogger().severe("LuckPerms API not found! Permissions and admin mode WILL NOT WORK correctly.");
+            // Не отключаем плагин здесь, но функционал будет сломан
+            return false;
         }
         try {
             this.luckPermsIntegration = new LuckPermsIntegration(provider.getProvider());
             getLogger().info("LuckPerms hooked successfully!");
+            return true;
         } catch (Exception e) {
-            getLogger().log(Level.SEVERE, "Error initializing LuckPerms integration", e);
-            luckPermsIntegration = null;
+            getLogger().log(Level.SEVERE, "Error initializing LuckPerms integration!", e);
+            return false;
         }
     }
 
     private void setupDynmap() {
-        if (configManager != null && configManager.getConfig() != null &&
-                configManager.getConfig().getBoolean("integrations.dynmap.enabled", true)) {
-            if (getServer().getPluginManager().isPluginEnabled("dynmap")) {
-                try {
-                    dynmapIntegration = new DynmapIntegration(this);
-                    if (dynmapIntegration.initialize()) {
-                        getLogger().info("Dynmap integration enabled.");
-                        if (dynmapIntegration.getDynmapManager() != null) {
-                            dynmapIntegration.getDynmapManager().loadTerritories();
-                        } else {
-                            getLogger().warning("DynmapManager is null after DynmapIntegration initialization. Cannot load territories.");
-                        }
-                    } else {
-                        getLogger().warning("Dynmap integration initialization failed (initialize() returned false). Territory features disabled.");
-                        dynmapIntegration = null;
-                    }
-                } catch (Exception | NoClassDefFoundError e) {
-                    getLogger().log(Level.WARNING, "Error initializing Dynmap integration. Territory features disabled.", e);
-                    dynmapIntegration = null;
+        // Проверяем и настройку в конфиге, и наличие плагина
+        if (configManager.getConfig().getBoolean("integrations.dynmap.enabled", false)
+                && getServer().getPluginManager().isPluginEnabled("dynmap")) {
+            try {
+                this.dynmapManager = new DynmapManager(this); // Создаем менеджер
+                if (this.dynmapManager.initialize()) { // Пытаемся инициализировать
+                    getLogger().info("Dynmap integration enabled.");
+                    // Загружаем территории после успешной инициализации
+                    this.dynmapManager.loadTerritories();
+                    this.dynmapManager.renderAllTerritories(); // Отображаем на карте
+                } else {
+                    getLogger().warning("Dynmap found, but failed to initialize integration. Territory features disabled.");
+                    this.dynmapManager = null; // Сбрасываем, если не удалось
                 }
-            } else {
-                getLogger().info("Dynmap integration enabled in config, but Dynmap plugin not found/enabled. Territory features unavailable.");
-                dynmapIntegration = null;
+            } catch (Exception | NoClassDefFoundError e) { // Ловим ошибки инициализации
+                getLogger().log(Level.WARNING, "Error initializing Dynmap integration. Territory features disabled.", e);
+                this.dynmapManager = null;
             }
         } else {
-            getLogger().info("Dynmap integration is disabled in config or config is unavailable.");
-            dynmapIntegration = null;
+            getLogger().info("Dynmap integration is disabled (in config or plugin not found).");
+            this.dynmapManager = null;
         }
     }
 
     private void setupOraxen() {
-        if (configManager != null && configManager.getConfig() != null &&
-                configManager.getConfig().getBoolean("integrations.oraxen.enabled", false)) {
+        if (configManager.isOraxenSupportEnabled()) { // Используем метод из ConfigManager
             if (getServer().getPluginManager().isPluginEnabled("Oraxen")) {
                 try {
-                    // OraxenIntegration сам проверит доступность API в конструкторе
                     this.oraxenIntegration = new OraxenIntegration(this);
-                    if (this.oraxenIntegration.isEnabled()) { // Проверяем флаг после создания
-                        getLogger().info("Oraxen integration enabled.");
-                    } else {
-                        // Лог об ошибке будет в конструкторе OraxenIntegration
-                        this.oraxenIntegration = null; // Сбрасываем, если не удалось
-                    }
-                } catch (Exception e) { // Ловим ошибки конструктора на всякий случай
-                    getLogger().log(Level.SEVERE, "Unexpected error creating OraxenIntegration", e);
+                    // Проверка доступности API Oraxen (если есть статический метод)
+                    // OraxenItems.isLoaded(); // Пример
+                    getLogger().info("Oraxen integration enabled.");
+                } catch (Exception | NoClassDefFoundError e) {
+                    getLogger().log(Level.WARNING, "Error initializing Oraxen integration. Oraxen support disabled.", e);
                     this.oraxenIntegration = null;
                 }
             } else {
-                getLogger().warning("Oraxen support enabled in config, but Oraxen plugin not found/enabled.");
+                getLogger().warning("Oraxen support is enabled in config, but Oraxen plugin not found or disabled.");
                 this.oraxenIntegration = null;
             }
         } else {
-            getLogger().info("Oraxen support is disabled in config or config is unavailable.");
+            getLogger().info("Oraxen support is disabled in config.");
             this.oraxenIntegration = null;
-        }
-    }
-
-    // --- Запуск Задач ---
-    private void scheduleTasks() {
-        // Payday Task
-        if (configManager != null && configManager.getConfig() != null &&
-                configManager.getConfig().getBoolean("payday.enabled", true)) {
-            long intervalMinutes = configManager.getConfig().getLong("payday.interval_minutes", 60);
-            if (intervalMinutes > 0) {
-                long intervalTicks = intervalMinutes * 60 * 20;
-                try {
-                    new PaydayTask(this).runTaskTimer(this, intervalTicks, intervalTicks);
-                    getLogger().info("Payday task scheduled every " + intervalMinutes + " minutes.");
-                } catch (Exception e) {
-                    getLogger().log(Level.SEVERE, "Failed to schedule PaydayTask!", e);
-                }
-            } else {
-                getLogger().warning("Payday interval is invalid (<= 0), task not scheduled.");
-            }
-        } else {
-            getLogger().info("Payday task is disabled or config is unavailable.");
-        }
-
-        // Auto-save modified factions task
-        if (configManager != null && configManager.getConfig() != null) {
-            long saveInterval = configManager.getConfig().getLong("general.auto_save_interval_minutes", 15);
-            if (saveInterval > 0 && factionManager != null) {
-                long saveTicks = saveInterval * 60 * 20;
-                Bukkit.getScheduler().runTaskTimerAsynchronously(this, () -> {
-                    try {
-                        // Проверяем FactionManager еще раз внутри задачи
-                        FactionManager fm = plugin.getFactionManager();
-                        if (fm != null) {
-                            fm.saveModifiedFactions();
-                        }
-                    } catch (Exception e) {
-                        getLogger().log(Level.SEVERE, "Error during auto-save of modified factions!", e);
-                    }
-                }, saveTicks, saveTicks);
-                getLogger().info("Scheduled auto-save for modified factions every " + saveInterval + " minutes.");
-            } else if (saveInterval <= 0) {
-                getLogger().info("Faction auto-save is disabled (interval <= 0).");
-            }
-        } else {
-            getLogger().info("Faction auto-save disabled because config is unavailable.");
         }
     }
 
 
     // --- Геттеры ---
-    public static HFactions getInstance() { return instance; }
+    public static HFactions getInstance() {
+        return instance;
+    }
+
     public ConfigManager getConfigManager() { return configManager; }
     public DatabaseManager getDatabaseManager() { return databaseManager; }
     public FactionManager getFactionManager() { return factionManager; }
@@ -343,9 +325,10 @@ public final class HFactions extends JavaPlugin {
     public CuffManager getCuffManager() { return cuffManager; }
     public ItemManager getItemManager() { return itemManager; }
     public CraftingManager getCraftingManager() { return craftingManager; }
-    public VaultIntegration getVaultIntegration() { return vaultIntegration; }
-    public LuckPermsIntegration getLuckPermsIntegration() { return luckPermsIntegration; }
-    public DynmapIntegration getDynmapIntegration() { return dynmapIntegration; }
-    public OraxenIntegration getOraxenIntegration() { return oraxenIntegration; }
-    public ConversationManager getConversationManager() { return conversationManager; }
+    public DynmapManager getDynmapManager() { return dynmapManager; } // Может быть null
+
+    public VaultIntegration getVaultIntegration() { return vaultIntegration; } // Может быть null
+    public LuckPermsIntegration getLuckPermsIntegration() { return luckPermsIntegration; } // Не должен быть null после onEnable
+    public OraxenIntegration getOraxenIntegration() { return oraxenIntegration; } // Может быть null
+
 }

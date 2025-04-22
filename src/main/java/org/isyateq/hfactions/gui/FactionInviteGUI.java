@@ -17,7 +17,7 @@ public class FactionInviteGUI implements InventoryHolder { // Реализуем
     private final HFactions plugin; // Сохраняем ссылку на плагин (может понадобиться для ключей и т.д.)
     private Inventory gui; // Сам инвентарь
 
-    public FactionInviteGUI(HFactions plugin) {
+    public FactionInviteGUI(HFactions plugin, PendingInvite invite) {
         this.plugin = plugin;
     }
 

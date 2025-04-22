@@ -3,14 +3,14 @@ package org.isyateq.hfactions.managers;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.isyateq.hfactions.HFactions;
-import org.isyateq.hfactions.util.Utils; // Убедимся, что Utils импортирован для getMessage
+import org.isyateq.hfactions.util.Utils;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.logging.Level; // Импортируем Level
+import java.util.logging.Level;
 
 public class ConfigManager {
 
@@ -21,7 +21,7 @@ public class ConfigManager {
     private FileConfiguration factionsConfig = null;
     private File factionsConfigFile = null;
 
-    // PlayerData больше не управляется этим менеджером
+    // playerdata.yml больше не используется напрямую здесь
     // private FileConfiguration playerDataConfig = null;
     // private File playerDataConfigFile = null;
 
@@ -33,124 +33,120 @@ public class ConfigManager {
 
     public ConfigManager(HFactions plugin) {
         this.plugin = plugin;
-        // Не вызываем loadConfigs здесь, это делает HFactions.onEnable()
+        // Загрузка происходит в loadConfigs()
     }
 
     // --- Загрузка всех конфигов ---
     public void loadConfigs() {
-        // --- config.yml ---
+        // config.yml
         configFile = new File(plugin.getDataFolder(), "config.yml");
         if (!configFile.exists()) {
-            plugin.getLogger().info("config.yml not found, creating from resources..."); // Используем info()
             plugin.saveResource("config.yml", false);
         }
         config = YamlConfiguration.loadConfiguration(configFile);
-        plugin.getLogger().info("Loaded config.yml");
+        // Загрузка defaults из JAR, если нужно (опционально)
+        loadDefaultsFromJar("config.yml", config);
 
-        // --- factions.yml ---
+
+        // factions.yml
         factionsConfigFile = new File(plugin.getDataFolder(), "factions.yml");
         if (!factionsConfigFile.exists()) {
-            plugin.getLogger().info("factions.yml not found, creating from resources..."); // Используем info()
             plugin.saveResource("factions.yml", false);
         }
         factionsConfig = YamlConfiguration.loadConfiguration(factionsConfigFile);
-        plugin.getLogger().info("Loaded factions.yml");
+        loadDefaultsFromJar("factions.yml", factionsConfig);
 
-        // --- territories.yml ---
+
+        // territories.yml (создаем, если нет)
         territoriesConfigFile = new File(plugin.getDataFolder(), "territories.yml");
         if (!territoriesConfigFile.exists()) {
-            plugin.getLogger().info("territories.yml not found, creating empty file..."); // Используем info()
             try {
-                // Создаем папку, если ее нет
-                if (!plugin.getDataFolder().exists()) {
-                    plugin.getDataFolder().mkdirs();
-                }
+                // Создаем пустой файл с корневой секцией
                 if (territoriesConfigFile.createNewFile()) {
-                    // Можно добавить базовую структуру
-                    YamlConfiguration tempConfig = YamlConfiguration.loadConfiguration(territoriesConfigFile);
+                    plugin.getLogger().info("Created empty territories.yml.");
+                    YamlConfiguration tempConfig = new YamlConfiguration();
                     tempConfig.createSection("territories");
                     tempConfig.save(territoriesConfigFile);
-                    plugin.getLogger().info("Created empty territories.yml.");
                 }
             } catch (IOException e) {
-                // Используем log() с уровнем SEVERE и исключением
                 plugin.getLogger().log(Level.SEVERE, "Could not create territories.yml!", e);
             }
         }
+        // Загружаем даже если только что создали (будет пустой или с секцией territories)
         territoriesConfig = YamlConfiguration.loadConfiguration(territoriesConfigFile);
-        plugin.getLogger().info("Loaded territories.yml");
 
 
-        // Загрузка lang.yml (в будущем)
+        // lang.yml (в будущем)
+        plugin.getLogger().info("Configurations loaded.");
     }
 
     // --- Перезагрузка конфигов ---
     public void reloadConfigs() {
-        // config.yml
+        plugin.getLogger().info("Reloading configurations...");
+        // Перезагружаем config.yml
         if (configFile != null) {
             config = YamlConfiguration.loadConfiguration(configFile);
-            plugin.getLogger().info("Reloaded config.yml");
+            loadDefaultsFromJar("config.yml", config); // Перезагрузка defaults
         } else {
-            plugin.getLogger().warning("Cannot reload config.yml: file object is null."); // Используем warning()
+            plugin.getLogger().warning("config.yml file object is null, cannot reload.");
         }
 
-        // factions.yml
+        // Перезагружаем factions.yml
         if (factionsConfigFile != null) {
             factionsConfig = YamlConfiguration.loadConfiguration(factionsConfigFile);
-            plugin.getLogger().info("Reloaded factions.yml");
+            loadDefaultsFromJar("factions.yml", factionsConfig);
         } else {
-            plugin.getLogger().warning("Cannot reload factions.yml: file object is null."); // Используем warning()
+            plugin.getLogger().warning("factions.yml file object is null, cannot reload.");
         }
 
-        // territories.yml
+        // Перезагружаем territories.yml
         if (territoriesConfigFile != null) {
             territoriesConfig = YamlConfiguration.loadConfiguration(territoriesConfigFile);
-            plugin.getLogger().info("Reloaded territories.yml");
         } else {
-            plugin.getLogger().warning("Cannot reload territories.yml: file object is null."); // Используем warning()
+            plugin.getLogger().warning("territories.yml file object is null, cannot reload.");
         }
 
         // Перезагрузка lang.yml (в будущем)
         plugin.getLogger().info("Configurations reloaded.");
     }
 
-    // --- Сохранение конфигов (только для тех, что могут меняться программно) ---
+    // --- Сохранение конфигов ---
 
-    public void saveFactionsConfig() { // Этот метод нужен FactionManager'у
+    // Сохраняем factions.yml
+    public void saveFactionsConfig() {
         if (factionsConfig == null || factionsConfigFile == null) {
-            plugin.getLogger().severe("Cannot save factions.yml: config object or file object is null."); // Используем severe()
+            plugin.getLogger().severe("Cannot save factions.yml: config or file object is null.");
             return;
         }
         try {
             factionsConfig.save(factionsConfigFile);
-            plugin.getLogger().fine("Saved factions.yml"); // Используем fine() для менее важных сообщений
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.SEVERE, "Could not save config to " + factionsConfigFile.getName(), ex); // Используем log()
+            plugin.getLogger().log(Level.SEVERE, "Could not save config to " + factionsConfigFile, ex);
         }
     }
 
-    public void saveTerritoriesConfig() { // Этот метод нужен DynmapManager'у
+    // Сохраняем territories.yml (вызывается из DynmapManager)
+    public void saveTerritoriesConfig() {
         if (territoriesConfig == null || territoriesConfigFile == null) {
-            plugin.getLogger().severe("Cannot save territories.yml: config object or file object is null."); // Используем severe()
+            plugin.getLogger().severe("Cannot save territories.yml: config or file object is null.");
             return;
         }
         try {
             territoriesConfig.save(territoriesConfigFile);
-            plugin.getLogger().fine("Saved territories.yml"); // Используем fine()
         } catch (IOException ex) {
-            plugin.getLogger().log(Level.SEVERE, "Could not save config to " + territoriesConfigFile.getName(), ex); // Используем log()
+            plugin.getLogger().log(Level.SEVERE, "Could not save config to " + territoriesConfigFile, ex);
         }
     }
 
     // --- Методы доступа к конфигурациям ---
     public FileConfiguration getConfig() {
         if (config == null) {
-            plugin.getLogger().warning("config.yml was requested but is null. Attempting to load..."); // Используем warning()
-            loadConfigs(); // Попытка перезагрузить (может помочь после /reload с ошибкой)
-            if (config == null) {
-                plugin.getLogger().severe("Failed to load config.yml even after reload attempt!"); // Используем severe()
-                // Возвращаем пустой конфиг, чтобы избежать NPE дальше?
-                // return new YamlConfiguration(); // Опасно, т.к. будут значения по умолчанию
+            plugin.getLogger().warning("getConfig() called but config is null, attempting to reload...");
+            reloadConfigs(); // Попытка перезагрузить
+            if (config == null) { // Если все еще null после перезагрузки
+                plugin.getLogger().severe("Failed to load config.yml even after reload attempt!");
+                // Возвращаем пустой конфиг, чтобы избежать NPE, но это плохой знак
+                return new YamlConfiguration();
             }
         }
         return config;
@@ -158,10 +154,11 @@ public class ConfigManager {
 
     public FileConfiguration getFactionsConfig() {
         if (factionsConfig == null) {
-            plugin.getLogger().warning("factions.yml was requested but is null. Attempting to load..."); // Используем warning()
-            loadConfigs();
+            plugin.getLogger().warning("getFactionsConfig() called but factionsConfig is null, attempting to reload...");
+            reloadConfigs();
             if (factionsConfig == null) {
-                plugin.getLogger().severe("Failed to load factions.yml even after reload attempt!"); // Используем severe()
+                plugin.getLogger().severe("Failed to load factions.yml even after reload attempt!");
+                return new YamlConfiguration();
             }
         }
         return factionsConfig;
@@ -169,69 +166,60 @@ public class ConfigManager {
 
     public FileConfiguration getTerritoriesConfig() {
         if (territoriesConfig == null) {
-            plugin.getLogger().warning("territories.yml was requested but is null. Attempting to load..."); // Используем warning()
-            loadConfigs();
+            plugin.getLogger().warning("getTerritoriesConfig() called but territoriesConfig is null, attempting to reload...");
+            reloadConfigs();
             if (territoriesConfig == null) {
-                plugin.getLogger().severe("Failed to load territories.yml even after reload attempt!"); // Используем severe()
+                plugin.getLogger().severe("Failed to load territories.yml even after reload attempt!");
+                return new YamlConfiguration();
             }
         }
         return territoriesConfig;
     }
 
-    // --- Методы для получения конкретных настроек ---
+    // --- Специализированные геттеры для настроек ---
+
+    /**
+     * Проверяет, включена ли поддержка Oraxen в конфигурации.
+     * Путь в config.yml: integrations.oraxen.enabled
+     * @return true, если включено, иначе false.
+     */
+    public boolean isOraxenSupportEnabled() {
+        // Получаем основной конфиг
+        FileConfiguration mainConfig = getConfig();
+        // Получаем значение по указанному пути, с дефолтным значением false
+        // Метод getBoolean() вернет false, если путь не найден или значение не boolean
+        return mainConfig.getBoolean("integrations.oraxen.enabled", false);
+    }
+
 
     public boolean isDebugModeEnabled() {
-        // Получаем конфиг через геттер для проверки на null
-        FileConfiguration currentConfig = getConfig();
-        return currentConfig != null && currentConfig.getBoolean("general.debug_mode", false);
+        return getConfig().getBoolean("general.debug_mode", false);
     }
 
-    // Убираем isOraxenSupportEnabled, т.к. проверка теперь в OraxenIntegration.isEnabled()
-
-    /**
-     * Получает сообщение из config.yml (временно, пока нет lang.yml).
-     * @param path Путь к сообщению в секции 'messages'.
-     * @param defaultMessage Значение по умолчанию, если сообщение не найдено.
-     * @return Отформатированное сообщение или defaultMessage.
-     */
-    public String getMessage(String path, String defaultMessage) {
-        FileConfiguration currentConfig = getConfig();
-        String rawMessage = defaultMessage; // По умолчанию
-        if (currentConfig != null) {
-            rawMessage = currentConfig.getString("messages." + path, defaultMessage);
-        } else {
-            plugin.getLogger().warning("Attempted to get message '" + path + "' but config is null."); // Используем warning()
-        }
-        // Используем Utils.color для форматирования
-        return Utils.color(rawMessage);
+    public String getMessage(String path, String s) {
+        // TODO: Заменить на получение из lang.yml в будущем
+        String message = getConfig().getString("messages." + path);
+        // Возвращаем сообщение или заглушку, если не найдено
+        return message != null ? Utils.color(message) : Utils.color("&cMessage not found: messages." + path);
     }
 
-    /**
-     * Получает сообщение из config.yml с стандартным сообщением об ошибке.
-     * @param path Путь к сообщению в секции 'messages'.
-     * @return Отформатированное сообщение.
-     */
-    public String getMessage(String path) {
-        return getMessage(path, "&cMessage not found: messages." + path);
-    }
-
-
-    // Вспомогательный метод для загрузки defaults из JAR (если нужно)
-    // Этот метод обычно не нужен, если используется saveResource()
-    /*
+    // Вспомогательный метод для загрузки defaults из JAR
     private void loadDefaultsFromJar(String filename, FileConfiguration targetConfig) {
+        if (targetConfig == null) return; // Проверка на null
+
         InputStream defConfigStream = plugin.getResource(filename);
         if (defConfigStream != null) {
             try (InputStreamReader reader = new InputStreamReader(defConfigStream, StandardCharsets.UTF_8)) {
                 YamlConfiguration defConfig = YamlConfiguration.loadConfiguration(reader);
                 targetConfig.setDefaults(defConfig);
-                // targetConfig.options().copyDefaults(true); // Не всегда нужно, saveResource уже копирует
+                // Не используем copyDefaults(true), чтобы не перезаписывать пользовательские секции,
+                // которых нет в defaults. Вместо этого полагаемся на getX(path, default).
+                // targetConfig.options().copyDefaults(true);
             } catch (IOException e) {
-                 plugin.getLogger().log(Level.SEVERE, "Could not load defaults from JAR for " + filename, e); // Используем log()
+                plugin.getLogger().log(Level.SEVERE,"Could not load default configuration from JAR: " + filename, e);
             }
         } else {
-             plugin.getLogger().warning("Default config file not found in JAR: " + filename); // Используем warning()
+            plugin.getLogger().warning("Default configuration file not found in JAR: " + filename);
         }
     }
-    */
 }

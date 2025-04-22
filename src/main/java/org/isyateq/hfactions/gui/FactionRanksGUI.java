@@ -1,95 +1,81 @@
-package org.isyateq.hfactions.gui; // Пакет gui!
+package org.isyateq.hfactions.gui;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.InventoryHolder;
-import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataType;
 import org.isyateq.hfactions.HFactions;
 import org.isyateq.hfactions.models.Faction;
 import org.isyateq.hfactions.models.FactionRank;
 import org.isyateq.hfactions.util.ItemStackBuilder;
 import org.isyateq.hfactions.util.Utils;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
-public class FactionRanksGUI implements InventoryHolder {
+public class FactionRanksGUI {
 
     private final HFactions plugin;
-    private Inventory gui;
+    private final Faction faction;
 
-    public FactionRanksGUI(HFactions plugin) {
+    // Ключ для хранения ID ранга в NBT предмета
+    private static final NamespacedKey RANK_ID_KEY = new NamespacedKey(HFactions.getInstance(), "hf_rank_id");
+
+    public FactionRanksGUI(HFactions plugin, Faction faction) {
         this.plugin = plugin;
+        this.faction = faction;
     }
 
-    /**
-     * Создает и возвращает инвентарь GUI управления рангами.
-     * @param faction Фракция, чьи ранги отображаем.
-     * @return Созданный инвентарь или null при ошибке.
-     */
-    public Inventory getInventory(Faction faction) {
+    public static NamespacedKey getRankIdKey() {
+        return RANK_ID_KEY;
+    }
+
+    public Inventory getInventory() {
         if (faction == null) return null;
 
-        // Рассчитываем размер инвентаря (минимум 18, максимум 54, кратно 9)
-        // +1 слот для информации
         int rankCount = faction.getRanks().size();
-        int guiSize = Math.min(54, Math.max(18, (int) (Math.ceil((double) (rankCount + 1) / 9.0) * 9)));
+        int size = Math.max(9, Math.min(54, (int) (Math.ceil(rankCount / 9.0) * 9))); // Кратный 9
 
-        gui = Bukkit.createInventory(this, guiSize, Utils.color("&1Manage Ranks: " + faction.getName()));
+        String title = Utils.color("&1Manage Ranks - " + faction.getName());
+        Inventory inv = Bukkit.createInventory(null, size, title);
 
         // Сортируем ранги по ID
         List<FactionRank> sortedRanks = new ArrayList<>(faction.getRanks().values());
         sortedRanks.sort(Comparator.comparingInt(FactionRank::getInternalId));
 
-        int slotIndex = 0;
+        int slot = 0;
         for (FactionRank rank : sortedRanks) {
-            if (slotIndex >= guiSize) break; // На случай, если рангов больше, чем слотов
+            if (slot >= size) break; // Не выходим за пределы GUI
 
-            // Создаем предмет для ранга
-            ItemStackBuilder rankItemBuilder = new ItemStackBuilder(Material.NAME_TAG) // Или другой материал
-                    .setName(Utils.color("&eRank " + rank.getInternalId() + ": &f" + rank.getDisplayName()))
-                    .setLore(
-                            Utils.color("&7Internal ID: &f" + rank.getInternalId()),
-                            Utils.color("&7Default Name: &f" + rank.getDefaultName()),
-                            Utils.color("&7Salary: &a$" + String.format(Locale.US, "%.2f", rank.getSalary())), // Форматируем зарплату
-                            Utils.color("&7Permissions: &f" + (rank.getPermissions().isEmpty() ? "None" : String.join(", ", rank.getPermissions()))),
-                            " ", // Пустая строка для разделения
-                            Utils.color("&bLeft-Click: &7Change display name"),
-                            Utils.color("&bRight-Click: &7Reset display name")
-                    )
-                    .addItemFlags(ItemFlag.HIDE_ATTRIBUTES)
-                    // Используем LocalizedName для хранения ID ранга
-                    .setLocalizedName(String.valueOf(rank.getInternalId()));
+            String displayName = rank.getDisplayName() != null ? rank.getDisplayName() : rank.getDefaultName();
+            String salary = String.format("%.2f", rank.getSalary()); // Форматируем ЗП
+            boolean isCustomName = rank.getDisplayName() != null;
 
-            // Добавляем зачарование лидеру? (Опционально)
-            if (rank.getInternalId() == 11) { // Предполагаем, что 11 - лидер
-                // builder.addEnchant(Enchantment.LUCK, 1);
-                // builder.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            List<String> lore = new ArrayList<>();
+            lore.add(Utils.color("&7Rank ID: &f" + rank.getInternalId()));
+            lore.add(Utils.color("&7Salary: &a$" + salary));
+            if (isCustomName) {
+                lore.add(Utils.color("&7Default Name: &o" + rank.getDefaultName()));
             }
+            lore.add("");
+            lore.add(Utils.color("&eLeft-Click: &fSet Display Name"));
+            lore.add(Utils.color("&eRight-Click: &fReset Display Name"));
+            // Можно добавить отображение прав
+            // lore.add(Utils.color("&7Permissions:"));
+            // rank.getPermissions().forEach(perm -> lore.add(Utils.color("&8 - " + perm)));
 
-            gui.setItem(slotIndex++, rankItemBuilder.build());
-        }
-
-        // Добавляем информационный предмет в конец (если есть место)
-        if (slotIndex < guiSize) {
-            ItemStack infoItem = new ItemStackBuilder(Material.BOOK)
-                    .setName(Utils.color("&6Information"))
-                    .setLore(
-                            Utils.color("&7Manage display names for your faction ranks."),
-                            Utils.color("&eUse LKM to set a new name via chat."),
-                            Utils.color("&eUse RKM to reset the name to its default.")
-                    )
+            ItemStack item = new ItemStackBuilder(Material.NAME_TAG) // Или другой материал
+                    .setName(Utils.color("&6Rank: &f" + displayName + (isCustomName ? " &7(&oCustom&7)" : "")))
+                    .setLore(lore)
+                    .setPersistentData(RANK_ID_KEY, PersistentDataType.INTEGER, rank.getInternalId()) // Сохраняем ID ранга
                     .build();
-            gui.setItem(guiSize - 1, infoItem); // Последний слот
+
+            inv.setItem(slot++, item);
         }
 
-
-        return gui;
-    }
-
-    @Override
-    public Inventory getInventory() {
-        return gui;
+        return inv;
     }
 }

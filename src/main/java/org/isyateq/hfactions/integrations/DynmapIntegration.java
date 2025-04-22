@@ -51,7 +51,7 @@ public class DynmapIntegration {
             }
 
             // Инициализируем наш менеджер для работы с картой
-            dynmapManager = new DynmapManager(plugin, markerAPI);
+            dynmapManager = new DynmapManager(plugin);
 
             // Создаем или получаем набор маркеров для территорий
             MarkerSet markerSet = markerAPI.getMarkerSet(MARKER_SET_ID);

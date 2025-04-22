@@ -1,289 +1,326 @@
 package org.isyateq.hfactions.managers;
 
+import io.th0rgal.oraxen.api.OraxenItems; // Импорт Oraxen API (если используется)
 import org.bukkit.Bukkit;
 import org.bukkit.Keyed;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.entity.Player;
 import org.bukkit.inventory.*;
+import org.bukkit.inventory.recipe.CraftingBookCategory; // Импорт категории
 import org.isyateq.hfactions.HFactions;
-import org.isyateq.hfactions.integrations.OraxenIntegration; // Импорт для Oraxen
-import org.isyateq.hfactions.util.Utils; // Для сообщений
+import org.isyateq.hfactions.util.Utils; // Для Utils.color
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.logging.Level;
 
 public class CraftingManager {
 
     private final HFactions plugin;
-    private final ConfigManager configManager;
-    private final ItemManager itemManager; // Нужен для получения результата крафта
-    private final OraxenIntegration oraxenIntegration; // Нужен для Oraxen предметов
+    private final PlayerManager playerManager; // Зависимость от PlayerManager
+    private final ItemManager itemManager; // Нужен для получения кастомных предметов
+    private final ConfigManager configManager; // Нужен для чтения конфига
 
-    // Храним информацию о кастомных рецептах (не обязательно сами рецепты Bukkit)
-    private final Map<String, CustomRecipeInfo> customRecipes = new HashMap<>();
-
-    // Класс для хранения информации о нашем кастомном рецепте
+    // Класс для хранения информации о кастомном рецепте (остается приватным)
     private static class CustomRecipeInfo {
-        final String id; // Уникальный ID рецепта из конфига
-        final Recipe bukkitRecipe; // Сам рецепт Bukkit (Shaped или Shapeless)
+        final ItemStack result;
         final List<String> allowedFactions;
         final String requiredPermission;
-        final boolean permissionRequired;
-        final ItemStack resultItem; // Кэшируем результат
+        final NamespacedKey key; // Ключ рецепта
 
-        CustomRecipeInfo(String id, Recipe bukkitRecipe, List<String> allowedFactions, String requiredPermission, boolean permissionRequired, ItemStack resultItem) {
-            this.id = id;
-            this.bukkitRecipe = bukkitRecipe;
-            this.allowedFactions = allowedFactions != null ? allowedFactions : new ArrayList<>();
+        // Конструктор
+        CustomRecipeInfo(NamespacedKey key, ItemStack result, List<String> allowedFactions, String requiredPermission) {
+            this.key = key;
+            this.result = result; // Сохраняем клон для безопасности? Не обязательно, т.к. result из конфига
+            this.allowedFactions = allowedFactions != null ? List.copyOf(allowedFactions) : List.of(); // Неизменяемый список
             this.requiredPermission = requiredPermission;
-            this.permissionRequired = permissionRequired;
-            this.resultItem = resultItem;
         }
     }
 
+    // Мапа для хранения информации о наших кастомных рецептах (ключ -> инфо)
+    private final Map<NamespacedKey, CustomRecipeInfo> customRecipes = new HashMap<>();
 
+    // Конструктор
     public CraftingManager(HFactions plugin) {
         this.plugin = plugin;
-        this.configManager = plugin.getConfigManager();
+        // Получаем зависимости из главного класса
+        this.playerManager = plugin.getPlayerManager();
         this.itemManager = plugin.getItemManager();
-        this.oraxenIntegration = plugin.getOraxenIntegration();
-        // Не загружаем рецепты здесь, это делает HFactions.onEnable()
+        this.configManager = plugin.getConfigManager();
+
+        // Проверка на null для критических зависимостей
+        if (this.playerManager == null || this.itemManager == null || this.configManager == null) {
+            plugin.getLogger().severe("CraftingManager could not be initialized due to missing dependencies (PlayerManager, ItemManager, or ConfigManager). Crafting will not work.");
+            // Можно было бы выбросить исключение, чтобы плагин не загрузился
+            // throw new IllegalStateException("Missing dependencies for CraftingManager");
+        }
     }
 
-    /**
-     * Загружает определения кастомных рецептов из config.yml.
-     */
+    // --- Загрузка рецептов из конфига ---
     public void loadRecipes() {
-        // Очищаем старые рецепты и удаляем их с сервера
-        clearRecipes();
+        customRecipes.clear(); // Очищаем старые данные
+        // TODO: Удалить старые зарегистрированные рецепты из Bukkit? Это сложнее.
+        // Bukkit.removeRecipe(key); - нужно итерировать и удалять
 
-        ConfigurationSection recipesSection = configManager.getConfig().getConfigurationSection("crafting.recipes");
-        if (!configManager.getConfig().getBoolean("crafting.enabled", false) || recipesSection == null) {
-            plugin.getLogger().info("Custom crafting is disabled or no recipes found in config.yml.");
+        FileConfiguration config = configManager.getConfig();
+        if (!config.getBoolean("crafting.enabled", false)) {
+            plugin.getLogger().info("Custom crafting is disabled in config.yml.");
+            return;
+        }
+
+        ConfigurationSection recipesSection = config.getConfigurationSection("crafting.recipes");
+        if (recipesSection == null) {
+            plugin.getLogger().info("No 'crafting.recipes' section found in config.yml.");
             return;
         }
 
         int loadedCount = 0;
-        for (String recipeId : recipesSection.getKeys(false)) {
-            ConfigurationSection recipeData = recipesSection.getConfigurationSection(recipeId);
+        for (String keyName : recipesSection.getKeys(false)) {
+            ConfigurationSection recipeData = recipesSection.getConfigurationSection(keyName);
             if (recipeData == null) continue;
 
+            NamespacedKey recipeKey = new NamespacedKey(plugin, keyName.toLowerCase()); // Ключ рецепта
+
             try {
-                ItemStack resultItem = parseResultItem(recipeData.getString("result"));
-                if (resultItem == null) {
-                    plugin.getLogger().warning("Invalid or missing 'result' item for recipe: " + recipeId);
+                // 1. Получаем результат крафта
+                String resultType = recipeData.getString("result.type", "");
+                String resultItemId = recipeData.getString("result.item_id"); // Для Oraxen или кастомных ID
+                int resultAmount = recipeData.getInt("result.amount", 1);
+                ItemStack resultItem = null;
+
+                if (resultItemId != null && !resultItemId.isEmpty() && configManager.isOraxenSupportEnabled() && plugin.getOraxenIntegration() != null) {
+                    // Пытаемся получить предмет Oraxen
+                    resultItem = plugin.getOraxenIntegration().getItemStack(resultItemId);
+                    if (resultItem != null) {
+                        resultItem.setAmount(resultAmount);
+                    } else {
+                        plugin.getLogger().warning("Oraxen item '" + resultItemId + "' not found for recipe '" + keyName + "'. Skipping recipe.");
+                        continue;
+                    }
+                } else if (!resultType.isEmpty()) {
+                    // Пытаемся получить ванильный предмет
+                    try {
+                        Material material = Material.valueOf(resultType.toUpperCase());
+                        resultItem = new ItemStack(material, resultAmount);
+                        // TODO: Добавить поддержку CustomModelData для ванильных предметов, если нужно
+                        // int customModelData = recipeData.getInt("result.custom_model_data", -1);
+                        // if (customModelData != -1) itemManager.applyCustomModelData(resultItem, customModelData);
+                    } catch (IllegalArgumentException e) {
+                        plugin.getLogger().warning("Invalid vanilla material type '" + resultType + "' for recipe '" + keyName + "'. Skipping recipe.");
+                        continue;
+                    }
+                } else {
+                    // Пытаемся получить предмет через ItemManager (тайзер, наручники и т.д.)
+                    resultItem = itemManager.getManagedItem(resultItemId); // resultItemId используется как ключ (taser, handcuffs...)
+                    if (resultItem != null) {
+                        resultItem.setAmount(resultAmount); // Устанавливаем количество
+                    } else {
+                        plugin.getLogger().warning("Invalid result item_id or type for recipe '" + keyName + "'. Skipping recipe.");
+                        continue;
+                    }
+                }
+
+                if (resultItem == null || resultItem.getType().isAir()) {
+                    plugin.getLogger().warning("Result item is null or AIR for recipe '" + keyName + "'. Skipping recipe.");
                     continue;
                 }
 
-                Recipe bukkitRecipe = null;
-                NamespacedKey key = new NamespacedKey(plugin, "hf_" + recipeId); // Уникальный ключ для Bukkit
 
-                // Определяем тип рецепта (форменный или бесформенный)
-                if (recipeData.contains("shape") && recipeData.isList("shape")) {
-                    // --- Форменный рецепт (ShapedRecipe) ---
-                    ShapedRecipe shapedRecipe = new ShapedRecipe(key, resultItem);
-                    List<String> shape = recipeData.getStringList("shape");
-                    if (shape.size() > 3 || shape.isEmpty()) {
-                        plugin.getLogger().warning("Invalid 'shape' for shaped recipe: " + recipeId + ". Must be 1-3 lines.");
-                        continue;
-                    }
-                    shapedRecipe.shape(shape.toArray(new String[0])); // Устанавливаем форму
+                // 2. Получаем условия
+                List<String> allowedFactions = recipeData.getStringList("allowed_factions")
+                        .stream().map(String::toLowerCase).toList(); // Приводим к нижнему регистру
+                String requiredPermission = recipeData.getString("craft_permission_node"); // Может быть null
 
-                    // Ингредиенты
-                    ConfigurationSection ingredientsSection = recipeData.getConfigurationSection("ingredients");
-                    if (ingredientsSection == null) {
-                        plugin.getLogger().warning("Missing 'ingredients' section for shaped recipe: " + recipeId);
-                        continue;
-                    }
-                    boolean ingredientsValid = true;
-                    for (String ingredientKey : ingredientsSection.getKeys(false)) {
-                        if (ingredientKey.length() != 1) {
-                            plugin.getLogger().warning("Invalid ingredient key '" + ingredientKey + "' in recipe: " + recipeId + ". Key must be a single character.");
-                            ingredientsValid = false;
-                            break;
-                        }
-                        char keyChar = ingredientKey.charAt(0);
-                        String ingredientValue = ingredientsSection.getString(ingredientKey);
-                        RecipeChoice choice = parseIngredient(ingredientValue);
-                        if (choice == null) {
-                            plugin.getLogger().warning("Invalid ingredient value '" + ingredientValue + "' for key '" + keyChar + "' in recipe: " + recipeId);
-                            ingredientsValid = false;
-                            break;
-                        }
-                        shapedRecipe.setIngredient(keyChar, choice);
-                    }
-                    if (!ingredientsValid) continue; // Пропускаем рецепт, если ингредиенты невалидны
-                    bukkitRecipe = shapedRecipe;
+                // 3. Создаем информацию о рецепте
+                CustomRecipeInfo recipeInfo = new CustomRecipeInfo(recipeKey, resultItem.clone(), allowedFactions, requiredPermission); // Сохраняем клон результата
 
-                } else if (recipeData.contains("ingredients") && recipeData.isList("ingredients")) {
-                    // --- Бесформенный рецепт (ShapelessRecipe) ---
-                    ShapelessRecipe shapelessRecipe = new ShapelessRecipe(key, resultItem);
-                    List<String> ingredientsList = recipeData.getStringList("ingredients");
-                    if (ingredientsList.isEmpty()) {
-                        plugin.getLogger().warning("Empty 'ingredients' list for shapeless recipe: " + recipeId);
-                        continue;
+                // 4. Создаем и регистрируем сам рецепт Bukkit
+                Recipe bukkitRecipe = createBukkitRecipe(recipeKey, resultItem, recipeData);
+                if (bukkitRecipe != null) {
+                    if (Bukkit.addRecipe(bukkitRecipe)) { // Пытаемся добавить рецепт
+                        customRecipes.put(recipeKey, recipeInfo); // Сохраняем инфо только если рецепт успешно добавлен
+                        loadedCount++;
+                        plugin.getLogger().fine("Registered custom recipe: " + keyName);
+                    } else {
+                        plugin.getLogger().warning("Failed to add recipe '" + keyName + "' to Bukkit (maybe a duplicate key or invalid recipe?).");
                     }
-                    boolean ingredientsValid = true;
-                    for (String ingredientValue : ingredientsList) {
-                        RecipeChoice choice = parseIngredient(ingredientValue);
-                        if (choice == null) {
-                            plugin.getLogger().warning("Invalid ingredient value '" + ingredientValue + "' in shapeless recipe: " + recipeId);
-                            ingredientsValid = false;
-                            break;
-                        }
-                        shapelessRecipe.addIngredient(choice);
-                    }
-                    if (!ingredientsValid) continue; // Пропускаем рецепт
-                    bukkitRecipe = shapelessRecipe;
                 } else {
-                    plugin.getLogger().warning("Invalid recipe format for: " + recipeId + ". Missing 'shape' or 'ingredients' list.");
-                    continue;
-                }
-
-                // Общие параметры рецепта
-                List<String> allowedFactions = recipeData.getStringList("allowed_factions");
-                boolean permissionRequired = recipeData.getBoolean("permission_required", false);
-                String requiredPermission = recipeData.getString("craft_permission_node", "hfactions.craft." + recipeId); // Дефолтное право
-
-                // Сохраняем информацию о рецепте
-                CustomRecipeInfo recipeInfo = new CustomRecipeInfo(recipeId, bukkitRecipe, allowedFactions, requiredPermission, permissionRequired, resultItem.clone()); // Сохраняем клон результата
-                customRecipes.put(recipeId, recipeInfo);
-
-                // Регистрируем рецепт в Bukkit
-                if (Bukkit.addRecipe(bukkitRecipe)) {
-                    loadedCount++;
-                    plugin.getLogger().fine("Registered custom recipe: " + recipeId);
-                } else {
-                    plugin.getLogger().warning("Failed to register recipe " + recipeId + " with Bukkit (maybe key conflict?).");
-                    customRecipes.remove(recipeId); // Удаляем из нашей мапы, если не смогли зарегистрировать
+                    plugin.getLogger().warning("Failed to create Bukkit recipe object for key: " + keyName);
                 }
 
             } catch (Exception e) {
-                plugin.getLogger().log(Level.SEVERE, "Error loading custom recipe: " + recipeId, e);
+                plugin.getLogger().log(Level.SEVERE, "Error loading custom recipe: " + keyName, e);
             }
         }
         plugin.getLogger().info("Loaded and registered " + loadedCount + " custom recipes.");
     }
 
-    /**
-     * Разбирает строку ингредиента (может быть ванильным Material или Oraxen ID).
-     * @param value Строка ингредиента (e.g., "DIAMOND", "oraxen:my_item").
-     * @return RecipeChoice или null, если не удалось разобрать.
-     */
-    private RecipeChoice parseIngredient(String value) {
-        if (value == null || value.isEmpty()) return null;
+    // Вспомогательный метод для создания объекта Recipe из конфига
+    private Recipe createBukkitRecipe(NamespacedKey key, ItemStack result, ConfigurationSection data) {
+        String type = data.getString("recipe_type", "SHAPED").toUpperCase(); // SHAPED или SHAPELESS
 
-        if (value.toLowerCase().startsWith("oraxen:") && oraxenIntegration != null && oraxenIntegration.isEnabled()) {
-            String oraxenId = value.substring(7);
-            ItemStack oraxenItem = oraxenIntegration.getOraxenItemById(oraxenId);
+        if ("SHAPED".equals(type)) {
+            ShapedRecipe shapedRecipe = new ShapedRecipe(key, result);
+            List<String> shape = data.getStringList("shape");
+            if (shape.isEmpty() || shape.size() > 3) {
+                plugin.getLogger().warning("Invalid shape for shaped recipe '" + key.getKey() + "'. Must be 1-3 strings.");
+                return null;
+            }
+            shapedRecipe.shape(shape.toArray(new String[0])); // Устанавливаем форму
+
+            ConfigurationSection ingredientsSection = data.getConfigurationSection("ingredients");
+            if (ingredientsSection == null) {
+                plugin.getLogger().warning("Missing 'ingredients' section for shaped recipe '" + key.getKey() + "'.");
+                return null;
+            }
+
+            // Устанавливаем ингредиенты
+            for (String ingredientKey : ingredientsSection.getKeys(false)) {
+                if (ingredientKey.length() != 1) {
+                    plugin.getLogger().warning("Invalid ingredient key '" + ingredientKey + "' in shaped recipe '" + key.getKey() + "'. Must be a single character.");
+                    continue; // Пропускаем невалидный ключ
+                }
+                char keyChar = ingredientKey.charAt(0);
+                String ingredientValue = ingredientsSection.getString(ingredientKey);
+                if (ingredientValue == null || ingredientValue.isEmpty()) continue;
+
+                RecipeChoice choice = parseIngredient(ingredientValue);
+                if (choice != null) {
+                    shapedRecipe.setIngredient(keyChar, choice);
+                } else {
+                    plugin.getLogger().warning("Invalid ingredient value '" + ingredientValue + "' for key '" + keyChar + "' in shaped recipe '" + key.getKey() + "'.");
+                    return null; // Считаем рецепт невалидным, если ингредиент плохой
+                }
+            }
+            // Установка категории для книги рецептов (опционально)
+            try {
+                String categoryStr = data.getString("category", "MISC").toUpperCase();
+                CraftingBookCategory category = CraftingBookCategory.valueOf(categoryStr);
+                shapedRecipe.setCategory(category);
+            } catch (IllegalArgumentException e) {
+                plugin.getLogger().warning("Invalid crafting category '" + data.getString("category") + "' for recipe " + key.getKey() + ". Using MISC.");
+                shapedRecipe.setCategory(CraftingBookCategory.MISC);
+            }
+
+            return shapedRecipe;
+
+        } else if ("SHAPELESS".equals(type)) {
+            ShapelessRecipe shapelessRecipe = new ShapelessRecipe(key, result);
+            List<String> ingredientsList = data.getStringList("ingredients"); // Здесь ingredients - это список строк
+            if (ingredientsList.isEmpty()) {
+                plugin.getLogger().warning("Missing 'ingredients' list for shapeless recipe '" + key.getKey() + "'.");
+                return null;
+            }
+
+            for (String ingredientValue : ingredientsList) {
+                RecipeChoice choice = parseIngredient(ingredientValue);
+                if (choice != null) {
+                    shapelessRecipe.addIngredient(choice);
+                } else {
+                    plugin.getLogger().warning("Invalid ingredient value '" + ingredientValue + "' in shapeless recipe '" + key.getKey() + "'.");
+                    return null; // Считаем рецепт невалидным
+                }
+            }
+            // Установка категории для книги рецептов (опционально)
+            try {
+                String categoryStr = data.getString("category", "MISC").toUpperCase();
+                CraftingBookCategory category = CraftingBookCategory.valueOf(categoryStr);
+                shapelessRecipe.setCategory(category);
+            } catch (IllegalArgumentException e) {
+                plugin.getLogger().warning("Invalid crafting category '" + data.getString("category") + "' for recipe " + key.getKey() + ". Using MISC.");
+                shapelessRecipe.setCategory(CraftingBookCategory.MISC);
+            }
+            return shapelessRecipe;
+        } else {
+            plugin.getLogger().warning("Unknown recipe_type '" + type + "' for recipe '" + key.getKey() + "'.");
+            return null;
+        }
+    }
+
+    // Вспомогательный метод для парсинга строки ингредиента (может быть Material или Oraxen ID)
+    private RecipeChoice parseIngredient(String ingredientString) {
+        if (ingredientString == null || ingredientString.isEmpty()) return null;
+
+        // 1. Проверяем, Oraxen ли это (если Oraxen включен)
+        if (configManager.isOraxenSupportEnabled() && plugin.getOraxenIntegration() != null) {
+            ItemStack oraxenItem = plugin.getOraxenIntegration().getItemStack(ingredientString);
             if (oraxenItem != null) {
-                return new RecipeChoice.ExactChoice(oraxenItem); // Точное совпадение для Oraxen предметов
-            } else {
-                plugin.getLogger().warning("Oraxen item not found for ID: " + oraxenId);
-                return null;
+                // Для Oraxen создаем RecipeChoice.ExactChoice
+                return new RecipeChoice.ExactChoice(oraxenItem);
             }
-        } else {
-            try {
-                Material material = Material.matchMaterial(value.toUpperCase());
-                if (material != null) {
-                    return new RecipeChoice.MaterialChoice(material);
-                } else {
-                    plugin.getLogger().warning("Invalid vanilla material: " + value);
-                    return null;
-                }
-            } catch (IllegalArgumentException e) {
-                plugin.getLogger().warning("Error parsing material: " + value + " - " + e.getMessage());
-                return null;
-            }
+            // Если не нашли Oraxen предмет, предполагаем, что это ванильный
+        }
+
+        // 2. Проверяем, ванильный ли это Material
+        try {
+            Material material = Material.valueOf(ingredientString.toUpperCase());
+            // Для ванильных используем RecipeChoice.MaterialChoice
+            return new RecipeChoice.MaterialChoice(material);
+        } catch (IllegalArgumentException e) {
+            // Не Oraxen и не ванильный Material
+            return null;
         }
     }
+
+
+    // --- Проверка возможности крафта ---
 
     /**
-     * Разбирает строку результата крафта (может быть ванильным Material, Oraxen ID или ID спец. предмета HFactions).
-     * @param value Строка результата (e.g., "DIAMOND", "oraxen:my_item", "hfactions:taser").
-     * @return ItemStack или null, если не удалось разобрать.
+     * Проверяет, может ли игрок скрафтить данный рецепт, учитывая права и фракцию.
+     * @param player Игрок, который крафтит.
+     * @param recipe Рецепт для проверки.
+     * @return true, если крафт разрешен, иначе false.
      */
-    private ItemStack parseResultItem(String value) {
-        if (value == null || value.isEmpty()) return null;
+    public boolean canCraft(Player player, Recipe recipe) {
+        if (player == null || recipe == null) return false;
 
-        if (value.toLowerCase().startsWith("hfactions:")) {
-            String hfItemId = value.substring(10).toLowerCase();
-            switch (hfItemId) {
-                case "taser": return itemManager.getTaserItem();
-                case "handcuffs": return itemManager.getHandcuffsItem();
-                case "protocol": return itemManager.getProtocolItem();
-                default:
-                    plugin.getLogger().warning("Unknown HFactions special item ID: " + hfItemId);
-                    return null;
-            }
-        } else if (value.toLowerCase().startsWith("oraxen:") && oraxenIntegration != null && oraxenIntegration.isEnabled()) {
-            String oraxenId = value.substring(7);
-            ItemStack oraxenItem = oraxenIntegration.getOraxenItemById(oraxenId);
-            if (oraxenItem == null) {
-                plugin.getLogger().warning("Oraxen result item not found for ID: " + oraxenId);
-            }
-            return oraxenItem; // Возвращаем null, если не найден
-        } else {
-            try {
-                Material material = Material.matchMaterial(value.toUpperCase());
-                if (material != null) {
-                    return new ItemStack(material);
-                } else {
-                    plugin.getLogger().warning("Invalid vanilla material for result: " + value);
-                    return null;
-                }
-            } catch (IllegalArgumentException e) {
-                plugin.getLogger().warning("Error parsing material for result: " + value + " - " + e.getMessage());
-                return null;
-            }
+        // Проверяем, является ли рецепт Keyed (имеет NamespacedKey)
+        if (!(recipe instanceof Keyed)) {
+            return true; // Разрешаем ванильные не-Keyed рецепты (если такие есть)
         }
+
+        NamespacedKey recipeKey = ((Keyed) recipe).getKey();
+
+        // Проверяем, наш ли это кастомный рецепт
+        CustomRecipeInfo recipeInfo = customRecipes.get(recipeKey);
+        if (recipeInfo == null) {
+            // Это не наш кастомный рецепт, разрешаем (ванильный или из другого плагина)
+            return true;
+        }
+
+        // Это наш рецепт, проверяем условия
+
+        // 1. Проверка прав
+        String requiredPermission = recipeInfo.requiredPermission;
+        boolean hasPermission = true; // Разрешено по умолчанию, если право не задано
+        if (requiredPermission != null && !requiredPermission.isEmpty()) {
+            hasPermission = player.hasPermission(requiredPermission);
+            plugin.getLogger().fine("Checking permission " + requiredPermission + " for player " + player.getName() + " -> " + hasPermission); // Debug
+        }
+
+        // 2. Проверка фракции
+        List<String> allowedFactions = recipeInfo.allowedFactions;
+        boolean factionAllowed = true; // Разрешено по умолчанию, если список пуст
+        if (allowedFactions != null && !allowedFactions.isEmpty()) {
+            String playerFactionId = playerManager.getPlayerFactionId(player); // Получаем ID фракции игрока
+            // Игрок должен быть во фракции, и ID фракции должен быть в списке разрешенных
+            factionAllowed = playerFactionId != null && allowedFactions.contains(playerFactionId.toLowerCase());
+            plugin.getLogger().fine("Checking faction " + playerFactionId + " against allowed " + allowedFactions + " -> " + factionAllowed); // Debug
+        }
+
+        boolean canCraftResult = hasPermission && factionAllowed;
+        plugin.getLogger().fine("Can player " + player.getName() + " craft recipe " + recipeKey.getKey() + "? -> " + canCraftResult); // Debug
+
+        return canCraftResult; // Крафт разрешен, только если оба условия выполнены
     }
 
-
-    /**
-     * Очищает зарегистрированные кастомные рецепты HFactions.
-     * Вызывается перед перезагрузкой.
-     */
-    public void clearRecipes() {
-        int removedCount = 0;
-        Iterator<Recipe> recipeIterator = Bukkit.recipeIterator();
-        while (recipeIterator.hasNext()) {
-            Recipe recipe = recipeIterator.next();
-            // Проверяем, является ли рецепт ключом нашего плагина
-            if (recipe instanceof Keyed && ((Keyed) recipe).getKey().getNamespace().equalsIgnoreCase(plugin.getName())) {
-                try {
-                    recipeIterator.remove(); // Удаляем рецепт с сервера
-                    removedCount++;
-                } catch (Exception e) {
-                    plugin.getLogger().log(Level.WARNING, "Failed to remove recipe: " + ((Keyed) recipe).getKey(), e);
-                }
-            }
-        }
-        customRecipes.clear(); // Очищаем нашу внутреннюю мапу
-        if (removedCount > 0) {
-            plugin.getLogger().info("Removed " + removedCount + " custom recipes.");
-        }
-    }
-
-    /**
-     * Получает информацию о кастомном рецепте по его результату.
-     * @param result ItemStack, который является результатом крафта.
-     * @return CustomRecipeInfo или null, если рецепт не найден.
-     */
-    public CustomRecipeInfo getCustomRecipeInfo(ItemStack result) {
-        if (result == null) return null;
-        // Ищем рецепт, у которого результат совпадает с данным (простое сравнение, может потребоваться isSimilar)
-        for (CustomRecipeInfo info : customRecipes.values()) {
-            if (result.isSimilar(info.resultItem)) { // Сравниваем через isSimilar
-                return info;
-            }
-        }
-        return null;
-    }
-
-    // Геттер для команды /hf listrecipes
-    public Map<String, CustomRecipeInfo> getCustomRecipes() {
-        return new HashMap<>(customRecipes); // Возвращаем копию
+    // Приватный метод для получения инфо (если вдруг понадобится внутри менеджера)
+    private CustomRecipeInfo getRecipeInfoByKey(NamespacedKey key) {
+        return customRecipes.get(key);
     }
 }
