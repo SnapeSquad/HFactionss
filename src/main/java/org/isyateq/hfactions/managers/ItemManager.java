@@ -221,4 +221,7 @@ public class ItemManager {
 
         return false;
     }
+
+    public ItemStack getManagedItem(String resultItemId) {
+    }
 }

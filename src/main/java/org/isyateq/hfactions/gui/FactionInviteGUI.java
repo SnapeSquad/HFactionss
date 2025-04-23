@@ -7,7 +7,6 @@ import org.bukkit.inventory.InventoryHolder; // Реализуем InventoryHold
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.isyateq.hfactions.HFactions; // Для доступа к плагину
-import org.isyateq.hfactions.models.Faction;
 import org.isyateq.hfactions.models.PendingInvite; // Модель приглашения
 import org.isyateq.hfactions.util.ItemStackBuilder;
 import org.isyateq.hfactions.util.Utils; // Для Utils.color
@@ -18,7 +17,7 @@ public class FactionInviteGUI implements InventoryHolder { // Реализуем
     private final HFactions plugin; // Сохраняем ссылку на плагин (может понадобиться для ключей и т.д.)
     private Inventory gui; // Сам инвентарь
 
-    public FactionInviteGUI(HFactions plugin, PendingInvite invite, Faction inviteFaction) {
+    public FactionInviteGUI(HFactions plugin) {
         this.plugin = plugin;
     }
 
