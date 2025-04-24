@@ -10,7 +10,7 @@ public class PendingInvite {
     private final String factionName; // Храним имя для отображения
     private final long timestamp; // Время создания приглашения
 
-    public PendingInvite(UUID inviterUUID, String inviterName, String factionId, String factionName) {
+    public PendingInvite(UUID inviterUUID, String inviterName, String factionId, long factionName) {
         this.inviterUUID = inviterUUID;
         this.inviterName = inviterName;
         this.factionId = factionId;

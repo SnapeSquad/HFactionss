@@ -16,6 +16,7 @@ import org.isyateq.hfactions.models.FactionRank;
 import org.isyateq.hfactions.models.FactionType;
 import org.isyateq.hfactions.models.PendingInvite;
 import org.isyateq.hfactions.util.Utils;
+import org.isyateq.hfactions.managers.CooldownManager;
 
 import java.util.*;
 import java.util.stream.Collectors;
