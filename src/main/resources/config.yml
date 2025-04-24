@@ -1,242 +1,119 @@
-# Настройки фракционного чата
-faction:
-  chat:
-    enabled: true
-    # Алиасы для команды переключения чата (помимо /hf chat, /hf c)
-    # Убедитесь, что эти команды зарегистрированы в plugin.yml!
-    toggle-command-aliases: ["fc", "fchat"]
-    # Формат сообщения во фракционном чате.
-    # Плейсхолдеры: {prefix}, {rank}, {player}, {message}
-    # Используйте цветовые коды Bukkit (&)
-    format: "&f{prefix} &7[{rank}] {player}: &f{message}"
-    # Право для использования чата (если false, доступно всем во фракции)
-    # require-permission: false
-    # permission-node: "hfactions.player.chat" # Используется, если require-permission: true
-
-  # Настройки приглашений
+# Настройки плагина HFactionss v2.0
+settings:
+  faction:
+    max-name-length: 16
+    min-name-length: 3
+    disallowed-name-chars: "[^a-zA-Z0-9_]" # Регулярное выражение для недопустимых символов
+    max-members: 20 # Максимальное количество участников (включая лидера и офицеров)
   invite:
-    timeout-seconds: 60 # Время жизни приглашения во фракцию в секундах
+    timeout-seconds: 120 # Время действия приглашения в секундах
 
-  # Настройки склада
-  warehouse:
-    enabled: true
-    # Формат заголовка GUI склада
-    gui_title_format: "&1Склад Фракции: &9{faction_name} &7(Стр. {page}/{max_pages})"
-    # Право на открытие склада (обычно у всех членов)
-    open_permission: "hfactions.faction.warehouse.open"
-    # Права на депозит/снятие (проверяются по умолчанию, можно добавить специфичные ноды)
-    # deposit_permission: "hfactions.faction.warehouse.deposit"
-    # withdraw_permission: "hfactions.faction.warehouse.withdraw"
+messages:
+  prefix: "&e[HFactions] &r"
+  reload: "&aКонфигурация HFactionss перезагружена."
+  player-only: "&cЭту команду может использовать только игрок."
+  no-permission: "&cУ вас нет прав для выполнения этого действия ({permission})."
+  faction-not-found: "&cФракция '{argument}' не найдена."
+  player-not-found: "&cИгрок '{argument}' не найден или не в сети."
+  faction-command-usage: "&cИспользование: /f {subcommand} {usage}"
+  help:
+    header: "&6--- Помощь по HFactionss ---"
+    format: "&e/f {command} {args} &7- {description}"
+    # Добавь сюда описания для всех команд
+    create: "create <название> - Создать фракцию"
+    disband: "disband - Распустить вашу фракцию (лидер)"
+    invite: "invite <игрок> - Пригласить игрока (лидер/офицер)"
+    join: "join <название> - Принять приглашение во фракцию"
+    leave: "leave - Покинуть текущую фракцию"
+    kick: "kick <игрок> - Исключить игрока (лидер/офицер)"
+    promote: "promote <игрок> - Повысить участника до офицера (лидер)"
+    demote: "demote <игрок> - Понизить офицера до участника (лидер)"
+    show: "show [название] - Показать информацию о фракции"
+    list: "list - Показать список фракций"
+    reload: "reload - Перезагрузить конфиг (hfactionss.admin)"
 
+  create:
+    success: "&aФракция '&f{faction_name}&a' успешно создана!"
+    fail-exists: "&cФракция с таким именем уже существует."
+    fail-in-faction: "&cВы уже состоите во фракции."
+    fail-name-length: "&cНазвание фракции должно быть от {min} до {max} символов."
+    fail-name-chars: "&cНазвание фракции содержит недопустимые символы."
+    usage: "create <название>"
 
-# Настройки штрафов
-fining:
-  enabled: true
-  # Использовать предмет "Протокол" (ПКМ по игроку) для инициирования штрафа?
-  # Если false, используется только команда /hf fine
-  use_protocol_item: true
-  # Алиасы для команды /hf fine
-  # Убедитесь, что эти команды зарегистрированы в plugin.yml!
-  command_aliases: ["fine"]
-  # ID фракции (lowercase), которая может выписывать штрафы
-  allowed_faction: "pd"
-  # Право, необходимое для использования команды/предмета
-  permission_node: "hfactions.pd.fine"
-  # Минимальный ID ранга для использования (0 = любой ранг с правом)
-  min_rank_id: 2
-  # Кулдаун после успешного штрафа (в секундах)
-  global_cooldown_seconds: 15
-  # Кулдаун на штраф одного и того же игрока этим же офицером (в минутах)
-  target_cooldown_minutes: 5
-  # Ограничения суммы штрафа
-  min_amount: 100.0
-  max_amount: 10000.0
-  # Куда поступают деньги от штрафа?
-  # "FACTION" - на счет фракции офицера (указанной в allowed_faction)
-  # "GOVERNMENT" - на счет фракции GOV (указанной в government_faction_id)
-  # "REMOVE" - деньги просто удаляются из экономики
-  # "PLAYER" - деньги получает офицер (не рекомендуется для RP)
-  money_destination: "FACTION"
-  government_faction_id: "gov" # ID фракции правительства (если money_destination: GOVERNMENT)
-  # Логирование штрафов в консоль/файл плагина
-  log_fines: true
-  log_format: "[FINE] Officer: {officer}, Target: {target}, Amount: {amount}, Reason: {reason}"
+  disband:
+    confirm: "&cВы уверены, что хотите распустить фракцию? Это действие необратимо. Введите /f disband confirm для подтверждения."
+    success: "&aВаша фракция '{faction_name}' была распущена."
+    fail-not-leader: "&cТолько лидер может распустить фракцию."
+    fail-not-in-faction: "&cВы не состоите во фракции."
+    usage: "disband [confirm]"
 
+  invite:
+    success-sent: "&aПриглашение во фракцию '{faction_name}' отправлено игроку {player_name}."
+    success-received: "&aВы были приглашены во фракцию '{faction_name}' лидером {inviter_name}. Используйте &e/f join {faction_name}&a для вступления в течение {timeout} секунд."
+    fail-no-permission: "&cТолько лидер или офицеры могут приглашать игроков."
+    fail-player-in-faction: "&cИгрок {player_name} уже состоит в фракции."
+    fail-faction-full: "&cВаша фракция достигла лимита участников ({max_members})."
+    fail-already-invited: "&cИгрок {player_name} уже приглашен в вашу фракцию."
+    fail-invite-self: "&cВы не можете пригласить самого себя."
+    fail-not-in-faction: "&cВы должны быть во фракции, чтобы приглашать."
+    usage: "invite <игрок>"
 
-# Настройки специальных предметов
-special_items:
-  taser:
-    enabled: true
-    # --- Интеграция с Oraxen (если Oraxen установлен и эта опция true) ---
-    oraxen_integration: false # Использовать Oraxen для предмета?
-    oraxen_item_id: "taser_gun" # ID предмета в Oraxen
-    # --- Стандартный предмет Minecraft (используется, если oraxen_integration: false или Oraxen не найден/ошибка) ---
-    item_material: "CROSSBOW" # Материал предмета
-    item_custom_model_data: 10001 # CustomModelData для ресурспака (0 - нет)
-    item_name: "&eПолицейский Тайзер" # Название предмета
-    item_lore: # Описание предмета
-      - "&7ПКМ для выстрела."
-      - "&7Оглушает цель на короткое время."
-    # --- Механика ---
-    range: 15.0 # Дальность выстрела в блоках
-    cooldown_seconds: 5 # Кулдаун в секундах
-    hit_effects: # Эффекты на цель (ТИП:Длительность_в_тиках:Уровень(0=I))
-      - "SLOW:100:4"        # Замедление V на 5 секунд
-      - "CONFUSION:140:0"   # Тошнота I на 7 секунд
-      - "BLINDNESS:40:0"    # Слепота I на 2 секунды
-      - "WEAKNESS:100:2"    # Слабость III на 5 секунд
-    # --- Правила применения ---
-    allow_friendly_fire: false # Стрелять в членов своей фракции?
-    allow_state_on_state_fire: false # Гос. служащие стрелять в других гос.?
-    # --- Звуки и частицы ---
-    sound_fire: "ENTITY_CROSSBOW_SHOOT" # Имя звука из Bukkit Sound enum
-    sound_hit_entity: "ENTITY_LIGHTNING_BOLT_THUNDER"
-    sound_hit_block: "BLOCK_CHAIN_BREAK"
-    particle_hit_entity: "CRIT_MAGIC" # Имя частицы из Bukkit Particle enum
-    # --- Крафт ---
-    craft_permission_node: "hfactions.craft.taser" # Право для крафта
-  payday:
-    enabled: true # Включить систему зарплаты?
-    # Интервал выплаты в минутах (реального времени)
-    interval_minutes: 60 # Раз в час
-    # Сообщение игроку при получении зарплаты
-    # Плейсхолдеры: {amount}, {currency}, {faction_name}, {rank_name}
-    message: "&a[Зарплата] На ваш счет зачислено: &e{amount} {currency} &a(Фракция: {faction_name}, Ранг: {rank_name})."
-    # Требуется ли, чтобы игрок был онлайн для получения зарплаты?
-    # Если false, плагин попытается начислить зарплату даже оффлайн игрокам (требует поддержки оффлайн-операций в плагине экономики)
-    require_online: true
-    # Логировать выплаты в консоль?
-    log_payments: true
-    log_format: "[Payday] Paid {amount} to {player} (Faction: {faction_id}, Rank: {rank_id})"
-  handcuffs:
-    enabled: true
-    oraxen_integration: false
-    oraxen_item_id: "handcuffs"
-    item_material: "SHEARS"
-    item_custom_model_data: 10002
-    item_name: "&7Наручники"
-    item_lore:
-      - "&7ПКМ по игроку, чтобы надеть."
-      - "&7Shift+ПКМ по связанному, чтобы отпустить."
-    # --- Механика ---
-    max_distance_leash: 10.0 # Макс. дистанция "поводка"
-    check_interval_ticks: 10 # Частота проверки дистанции (в тиках)
-    cuffed_effects: # Эффекты на связанного
-      - "SLOW:999999:5" # Замедление VI (практически стоп)
-      - "JUMP:999999:128" # Запрет прыжков
-      - "SLOW_DIGGING:999999:4" # Медленная рука
-    # Запреты для связанного игрока
-    disable_item_drop: true
-    disable_item_pickup: true
-    disable_block_break: true
-    disable_block_place: true
-    disable_inventory_open: true
-    disable_item_switch: false # Разрешаем менять слот
-    disable_interaction: true # Запрещаем ПКМ по блокам (двери, сундуки)
-    # --- Правила применения ---
-    allow_friendly_cuff: false # На своих?
-    allow_state_on_state_cuff: false # Гос -> Гос?
-    # --- Звуки ---
-    sound_cuff: "ENTITY_IRON_GOLEM_REPAIR"
-    sound_uncuff: "ENTITY_PLAYER_ATTACK_SWEEP"
-    sound_leash_teleport: "ENTITY_ENDERMAN_TELEPORT"
-    # --- Крафт ---
-    craft_permission_node: "hfactions.craft.handcuffs"
+  join:
+    success: "&aВы успешно вступили во фракцию '{faction_name}'!"
+    broadcast: "&aИгрок {player_name} вступил во фракцию."
+    fail-no-invite: "&cУ вас нет приглашения во фракцию '{faction_name}' или оно истекло."
+    fail-already-in-faction: "&cВы уже состоите в другой фракции. Покиньте ее (/f leave), чтобы вступить в новую."
+    fail-faction-full: "&cФракция '{faction_name}' заполнена."
+    usage: "join <название_фракции>"
 
-  protocol:
-    enabled: true # Включен ли предмет "Протокол"
-    oraxen_integration: false
-    oraxen_item_id: "protocol_book"
-    item_material: "WRITABLE_BOOK"
-    item_custom_model_data: 10003
-    item_name: "&bПротокол о Нарушении"
-    item_lore:
-      - "&7ПКМ по игроку, чтобы"
-      - "&7начать оформление штрафа."
-    # --- Крафт ---
-    craft_permission_node: "hfactions.craft.protocol"
+  leave:
+    success: "&aВы покинули фракцию '{faction_name}'."
+    broadcast: "&cИгрок {player_name} покинул фракцию."
+    fail-leader: "&cЛидер не может покинуть фракцию. Распустите ее (/f disband) или передайте лидерство (/f setleader <игрок> - нужно реализовать)."
+    fail-not-in-faction: "&cВы не состоите во фракции."
+    usage: "leave"
 
+  kick:
+    success: "&aИгрок {target_name} был исключен из фракции."
+    success-target: "&cВы были исключены из фракции '{faction_name}' игроком {kicker_name}."
+    fail-no-permission: "&cТолько лидер или офицеры могут исключать игроков."
+    fail-cannot-kick-leader: "&cНельзя исключить лидера фракции."
+    fail-cannot-kick-officer: "&cОфицер не может исключить другого офицера (только лидер)."
+    fail-cannot-kick-self: "&cВы не можете исключить себя."
+    fail-target-not-in-faction: "&cИгрок {target_name} не состоит в вашей фракции."
+    fail-not-in-faction: "&cВы не состоите во фракции."
+    usage: "kick <игрок>"
 
-# Настройки кастомного крафта
-# Ключ секции (handcuffs, taser, protocol) используется как ID крафта
-# и должен совпадать с ID в секции special_items, если результат - спец. предмет
-crafting:
-  handcuffs:
-    enabled: true
-    permission_required: true # Требуется ли право для крафта?
-    # craft_permission_node: "hfactions.craft.handcuffs" # Можно указать здесь, или возьмется из special_items
-    shape: # Формовой рецепт
-      - " I " # Пробелы важны для позиционирования
-      - "ISI"
-      - " S "
-    ingredients: # Ключи (I, S) должны совпадать с символами в shape
-      I: "IRON_INGOT" # Материал Minecraft
-      S: "STICK"
-    # Фракции, которым доступен крафт (если пусто - доступно всем с правом)
-    allowed_factions: ["pd", "fib"]
+  promote:
+    success: "&aИгрок {target_name} повышен до Офицера."
+    success-target: "&aВы были повышены до Офицера во фракции '{faction_name}'."
+    fail-not-leader: "&cТолько лидер может повышать участников."
+    fail-target-not-member: "&cИгрок {target_name} не является обычным участником вашей фракции."
+    fail-target-already-officer: "&cИгрок {target_name} уже является офицером."
+    fail-promote-self: "&cВы не можете повысить себя."
+    fail-not-in-faction: "&cВы не состоите во фракции."
+    usage: "promote <игрок>"
 
-  taser:
-    enabled: true
-    permission_required: true
-    # craft_permission_node: "hfactions.craft.taser"
-    shape:
-      - "SRS"
-      - "RBR"
-      - " I "
-    ingredients:
-      S: "STRING"
-      R: "REDSTONE"
-      B: "CROSSBOW"
-      I: "IRON_INGOT"
-      # Пример Oraxen ингредиента (если включена интеграция):
-      # I: "oraxen:energy_cell" # Используйте ID предмета Oraxen
-    allowed_factions: ["pd", "fib"]
+  demote:
+    success: "&aИгрок {target_name} понижен до Участника."
+    success-target: "&cВы были понижены до Участника во фракции '{faction_name}'."
+    fail-not-leader: "&cТолько лидер может понижать офицеров."
+    fail-target-not-officer: "&cИгрок {target_name} не является офицером вашей фракции."
+    fail-demote-self: "&cВы не можете понизить себя."
+    fail-not-in-faction: "&cВы не состоите во фракции."
+    usage: "demote <игрок>"
 
-  protocol:
-    enabled: true
-    permission_required: true
-    # craft_permission_node: "hfactions.craft.protocol"
-    shape:
-      - " P "
-      - "PBP"
-      - " I "
-    ingredients:
-      P: "PAPER"
-      B: "BOOK"
-      I: "INK_SAC"
-    allowed_factions: ["pd"]
+  show:
+    header: "&6--- Фракция: &f{faction_name} &6---"
+    leader: "&cЛидер: &f{leader_name}"
+    officers: "&eОфицеры ({count}): &f{officer_list}"
+    members: "&aУчастники ({count}): &f{member_list}"
+    no-officers: "&eОфицеры ({count}): &7Нет"
+    no-members: "&aУчастники ({count}): &7Нет"
+    total: "&bВсего: &f{total_members}/{max_members}"
+    not-in-faction: "&cВы не состоите во фракции, укажите название: /f show <название>"
 
-  # Пример бесформенного рецепта
-  # my_custom_item:
-  #   enabled: true
-  #   permission_required: false
-  #   result_item: "DIAMOND_SWORD{display:{Name:'{\"text\":\"Super Sword\"}'}}" # Пример результата с NBT (формат JSON) - требует сложной обработки
-  #   shapeless_ingredients:
-  #     - "DIAMOND"
-  #     - "STICK"
-
-
-# Настройки Dynmap
-dynmap:
-  enabled: true # Включить интеграцию?
-  # Как часто автоматически обновлять маркеры территорий на карте (в секундах)
-  # 0 - отключить автообновление
-  update_interval_seconds: 300
-  # Название слоя фракций на карте
-  marker_set_label: "Фракции (HFactions)"
-  # Внутренний ID слоя (лучше не менять после первого запуска)
-  marker_set_id: "hfactions_territories"
-  # Стиль зон по умолчанию
-  default_style:
-    stroke_color: "#FFFFFF" # Цвет контура (HEX)
-    stroke_opacity: 0.8 # Прозрачность контура (0.0 - 1.0)
-    stroke_weight: 2 # Толщина контура
-    # fill_color: "#000000" # Цвет заливки (будет автоматически взят из цвета фракции)
-    fill_opacity: 0.35 # Прозрачность заливки
-    # Содержимое всплывающего окна при клике на зону (HTML разрешен)
-    # Плейсхолдеры: {faction_name}, {faction_id}, {faction_prefix}, {zone_name}, {member_count}
-    popup_content: |
-      <div style="font-weight: bold; font-size: 120%;">{faction_prefix}{faction_name}</div>
-      <div>Территория: {zone_name}</div>
-      <div>Владелец: Фракция ID {faction_id}</div>
-      <div>Участников: {member_count}</div>
+  list:
+    header: "&6--- Список фракций ({count}) ---"
+    format: "&f{faction_name} &7({online_count}/{total_count} онлайн)"
+    empty: "&7На сервере пока нет фракций."

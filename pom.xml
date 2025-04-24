@@ -13,7 +13,7 @@
     <description>Majestic RP inspired factions plugin for Minecraft</description>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>17</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Убедись, что версия Paper API соответствует твоей версии сервера 1.21+ -->
         <paper.version>1.21-R0.1-SNAPSHOT</paper.version>

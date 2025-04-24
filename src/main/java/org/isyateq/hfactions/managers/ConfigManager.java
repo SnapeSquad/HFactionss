@@ -37,7 +37,7 @@ public class ConfigManager {
     }
 
     // --- Загрузка всех конфигов ---
-    public void loadConfigs() {
+    public boolean loadConfigs() {
         // config.yml
         configFile = new File(plugin.getDataFolder(), "config.yml");
         if (!configFile.exists()) {
@@ -78,6 +78,7 @@ public class ConfigManager {
 
         // lang.yml (в будущем)
         plugin.getLogger().info("Configurations loaded.");
+        return false;
     }
 
     // --- Перезагрузка конфигов ---
