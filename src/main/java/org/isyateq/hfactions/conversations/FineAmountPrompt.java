@@ -7,6 +7,7 @@ import org.isyateq.hfactions.HFactions;
 import org.isyateq.hfactions.managers.ConfigManager;
 import org.isyateq.hfactions.integrations.VaultIntegration; // Нужен Vault
 import org.isyateq.hfactions.util.Utils; // Для цвета
+import org.jetbrains.annotations.NotNull;
 
 
 public class FineAmountPrompt extends NumericPrompt { // Наследуемся от NumericPrompt
@@ -17,11 +18,10 @@ public class FineAmountPrompt extends NumericPrompt { // Наследуемся 
     public FineAmountPrompt(HFactions plugin, Player target) {
         this.plugin = plugin;
         this.target = target;
-        // Проверка target на null не нужна здесь, т.к. она делается в ProtocolListener
     }
 
     @Override
-    public String getPromptText(ConversationContext context) {
+    public @NotNull String getPromptText(@NotNull ConversationContext context) {
         ConfigManager cm = plugin.getConfigManager();
         // Получаем имя цели безопасно
         String targetName = target != null ? target.getName() : "Unknown Player";
@@ -34,7 +34,7 @@ public class FineAmountPrompt extends NumericPrompt { // Наследуемся 
 
     // Вызывается, если ввод является числом
     @Override
-    protected Prompt acceptValidatedInput(ConversationContext context, Number input) {
+    protected Prompt acceptValidatedInput(ConversationContext context, @NotNull Number input) {
         Player officer = (Player) context.getForWhom();
         ConfigManager cm = plugin.getConfigManager();
         VaultIntegration vault = plugin.getVaultIntegration(); // Получаем Vault
@@ -74,7 +74,7 @@ public class FineAmountPrompt extends NumericPrompt { // Наследуемся 
 
     // Вызывается, если ввод НЕ является числом
     @Override
-    protected String getInputNotNumericText(ConversationContext context, String invalidInput) {
+    protected String getInputNotNumericText(@NotNull ConversationContext context, @NotNull String invalidInput) {
         ConfigManager cm = plugin.getConfigManager();
         String message = "&cInvalid amount specified. Must be a number."; // Дефолт
         if (cm != null) {
@@ -86,7 +86,7 @@ public class FineAmountPrompt extends NumericPrompt { // Наследуемся 
 
     // Дополнительно можно переопределить getFailedValidationText, если NumericPrompt делает свои проверки
     @Override
-    protected String getFailedValidationText(ConversationContext context, String invalidInput) {
+    protected String getFailedValidationText(@NotNull ConversationContext context, @NotNull String invalidInput) {
         // По умолчанию NumericPrompt не имеет своей валидации, но на всякий случай
         return getInputNotNumericText(context, invalidInput);
     }

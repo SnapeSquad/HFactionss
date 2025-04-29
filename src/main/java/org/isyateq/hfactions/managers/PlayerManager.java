@@ -2,17 +2,15 @@ package org.isyateq.hfactions.managers;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.OfflinePlayer; // Импортируем OfflinePlayer
 import org.bukkit.entity.Player;
 import org.isyateq.hfactions.HFactions;
 import org.isyateq.hfactions.models.Faction;
 import org.isyateq.hfactions.models.FactionRank;
 import org.isyateq.hfactions.models.PendingInvite;
-import org.isyateq.hfactions.util.Utils; // Импорт Utils
+import org.isyateq.hfactions.util.Utils;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
 
 public class PlayerManager {
 
@@ -672,5 +670,8 @@ public class PlayerManager {
 
         // 2. Очистка данных в БД (СИНХРОННО, так как вызывается из админ команды)
         databaseManager.clearFactionDataSync(factionIdLower);
+    }
+
+    public void saveDataForOnlinePlayersSynchronously() {
     }
 }

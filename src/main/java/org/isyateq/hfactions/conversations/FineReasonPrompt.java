@@ -13,7 +13,6 @@ import org.isyateq.hfactions.util.Utils; // Для цвета
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Locale;
-import java.util.logging.Level;
 
 /**
  * Prompt для ввода причины штрафа.
@@ -28,7 +27,6 @@ public class FineReasonPrompt extends StringPrompt { // Наследуемся �
         this.plugin = plugin;
         this.target = target;
         this.amount = amount;
-        // Проверки на null не нужны здесь, т.к. делаются при создании
     }
 
     @Override

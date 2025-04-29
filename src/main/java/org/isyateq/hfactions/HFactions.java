@@ -58,7 +58,10 @@ public final class HFactions extends JavaPlugin {
         this.messageUtil = new MessageUtil(this); // Инициализация MessageUtil ПОСЛЕ загрузки конфига
 
         this.inviteManager = new InviteManager(this);
-        this.factionManager = new FactionManager(this, inviteManager);
+        this.factionManager = new FactionManager(this);
+        this.messageUtil = new MessageUtil(this);
+        this.inviteManager = new InviteManager(this);
+        this.factionManager = new FactionManager(this);
 
         // 0. Инициализация базовых менеджеров (без зависимостей от конфигов)
         cooldownManager = new CooldownManager(); // Инициализируем CooldownManager
@@ -79,7 +82,7 @@ public final class HFactions extends JavaPlugin {
 
         // 3. Инициализация Интеграций (ДО менеджеров, которые их используют)
         getLogger().info("Setting up integrations...");
-        if (!setupVault()) { /* Vault не обязателен, просто выводим предупреждение */ }
+        setupVault();/* Vault не обязателен, просто выводим предупреждение */
         if (!setupLuckPerms()) { // LuckPerms обязателен
             getLogger().severe("LuckPerms integration failed! Disabling plugin.");
             getServer().getPluginManager().disablePlugin(this);
@@ -142,17 +145,18 @@ public final class HFactions extends JavaPlugin {
         // Сохранение данных (фракции, игроки)
         getLogger().info("Saving data...");
         if (factionManager != null) {
-            // Сохраняем все фракции при выключении, а не только измененные
-            factionManager.saveAllFactions();
+            getLogger().info("Сохранение данных фракций...");
+            factionManager.saveFactionsSync();
+            getLogger().info("Данные фракций сохранены.");
         }
         if (playerManager != null) {
             // Сохраняем данные онлайн игроков синхронно!
             playerManager.saveDataForOnlinePlayersSynchronously(); // Нужен синхронный метод
         }
         // Сохранение территорий Dynmap?
-        if (dynmapManager != null && dynmapManager.isDynmapEnabled()) {
-            // dynmapManager.saveTerritories(); // Если есть метод для сохранения
-        }
+        if (dynmapManager != null) {
+            dynmapManager.isDynmapEnabled();
+        }// dynmapManager.saveTerritories(); // Если есть метод для сохранения
 
         // Закрытие соединения с БД
         getLogger().info("Closing database connection...");
@@ -171,7 +175,7 @@ public final class HFactions extends JavaPlugin {
             Objects.requireNonNull(getCommand("hfactions"), "Command 'hfactions' not found in plugin.yml")
                     .setExecutor(new FactionCommand(this));
             // TabCompleter теперь устанавливается в конструкторе FactionCommand или отдельно:
-            getCommand("hfactions").setTabCompleter(new FactionCommand(this));
+            Objects.requireNonNull(getCommand("hfactions")).setTabCompleter(new FactionCommand(this));
         } catch (NullPointerException e) {
             getLogger().log(Level.SEVERE, "Failed to register command 'hfactions'. Is it defined in plugin.yml?", e);
         } catch (Exception e) { // Ловим другие возможные ошибки
@@ -194,15 +198,15 @@ public final class HFactions extends JavaPlugin {
 
     private void scheduleTasks() {
         // Payday Task
-        if (configManager.isPaydayEnabled()) { // Используем метод из ConfigManager
-            long intervalTicks = configManager.getPaydayIntervalTicks();
-            if (intervalTicks > 0) {
+        if (getConfig().getBoolean("settings.payday.enabled", false)) { // Используем метод из ConfigManager
+            long interval = getConfig().getLong("settings.payday.interval-ticks", 72000L);
+            if (interval > 0) {
                 // Создаем экземпляр задачи и запускаем таймер
                 PaydayTask paydayTask = new PaydayTask(this);
-                paydayTaskRef = paydayTask.runTaskTimer(this, intervalTicks, intervalTicks); // Сохраняем ссылку
-                getLogger().info("Payday task scheduled every " + (intervalTicks / 20L) + " seconds.");
+                paydayTaskRef = paydayTask.runTaskTimer(this, interval, interval); // Сохраняем ссылку
+                getLogger().info("Payday task scheduled every " + (interval / 20L) + " seconds.");
             } else {
-                getLogger().warning("Payday interval is invalid ("+ intervalTicks +" ticks), task not scheduled.");
+                getLogger().warning("Payday interval is invalid ("+ interval +" ticks), task not scheduled.");
             }
         } else {
             getLogger().info("Payday task is disabled in config.");
@@ -213,20 +217,19 @@ public final class HFactions extends JavaPlugin {
 
     // --- Настройка интеграций ---
 
-    private boolean setupVault() {
+    private void setupVault() {
         if (getServer().getPluginManager().getPlugin("Vault") == null) {
             getLogger().warning("Vault not found! Economy features might be limited or disabled.");
-            return false; // Не критично для запуска, но функционал пострадает
+            return; // Не критично для запуска, но функционал пострадает
         }
         RegisteredServiceProvider<Economy> rsp = getServer().getServicesManager().getRegistration(Economy.class);
         if (rsp == null) {
             getLogger().warning("Vault found, but no Economy provider found! Economy features will be disabled.");
-            return false; // Не критично
+            return; // Не критично
         }
         Economy econ = rsp.getProvider();
         this.vaultIntegration = new VaultIntegration(econ);
         getLogger().info("Vault & Economy hooked successfully!");
-        return true;
     }
 
     private boolean setupLuckPerms() {
@@ -252,7 +255,7 @@ public final class HFactions extends JavaPlugin {
 
     // Используем DynmapManager вместо DynmapIntegration
     private void setupDynmapManager() {
-        if (!configManager.isDynmapEnabled()) { // Проверяем конфиг
+        if (!getConfig().getBoolean("settings.integrations.dynmap.enabled", false)) { // Проверяем конфиг
             getLogger().info("Dynmap integration disabled in config.");
             this.dynmapManager = null;
             return;

@@ -44,7 +44,7 @@ public class FactionManager {
     private final Map<UUID, String> disbandConfirmation = new HashMap<>();
 
 
-    public FactionManager(HFactions plugin, InviteManager inviteManager) {
+    public FactionManager(HFactions plugin) {
         this.plugin = plugin;
         this.messageUtil = plugin.getMessageUtil();
         this.inviteManager = inviteManager;
