@@ -1,9 +1,9 @@
 name: HFactionss
 version: 2.0 # Обновленная версия
 main: org.isyateq.hfactions.HFactions
-api-version: 1.19 # Используем актуальную версию API
-author: YourName
-description: Улучшенный плагин фракций.
+api-version: 1.21.3 # Используем актуальную версию API
+author: IsyaTeq
+description:
 
 commands:
   f:

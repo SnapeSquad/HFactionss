@@ -12,7 +12,7 @@ import java.util.logging.Level;
 public class OraxenIntegration {
 
     private final HFactions plugin;
-    private boolean enabled = false; // Флаг успешной инициализации
+    private boolean enabled; // Флаг успешной инициализации
 
     public OraxenIntegration(HFactions plugin) {
         this.plugin = plugin;
@@ -107,5 +107,7 @@ public class OraxenIntegration {
         }
     }
 
-    public ItemStack getItemStack(String resultItemId) { }
+    public ItemStack getItemStack(String resultItemId) {
+        return null;
+    }
 }
