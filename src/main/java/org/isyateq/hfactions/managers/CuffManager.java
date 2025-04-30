@@ -155,7 +155,7 @@ public class CuffManager {
 
         // Проверка, не является ли игрок сам собой
         if (cuffed.getUniqueId().equals(cuffer.getUniqueId())) {
-            cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.cant_cuff_self", "&cYou cannot cuff yourself.")));
+            cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.cant_cuff_self")));
             return;
         }
 
@@ -163,7 +163,7 @@ public class CuffManager {
         if (isCuffed(cuffed)) {
             Player currentCuffer = Bukkit.getPlayer(cuffedPlayers.get(cuffed.getUniqueId()));
             String cufferName = currentCuffer != null ? currentCuffer.getName() : "someone";
-            String msg = configManager.getMessage("handcuffs.already_cuffed", "&c{target_name} is already cuffed by {cuffer_name}.");
+            String msg = configManager.getMessage("handcuffs.already_cuffed");
             cuffer.sendMessage(Utils.color(msg.replace("{target_name}", cuffed.getName()).replace("{cuffer_name}", cufferName)));
             return;
         }
@@ -191,9 +191,9 @@ public class CuffManager {
         }
 
         // Отправляем сообщения
-        String targetMsg = configManager.getMessage("handcuffs.cuffed_target", "&cYou have been cuffed by {cuffer_name}.");
+        String targetMsg = configManager.getMessage("handcuffs.cuffed_target");
         cuffed.sendMessage(Utils.color(targetMsg.replace("{cuffer_name}", cuffer.getName())));
-        String cufferMsg = configManager.getMessage("handcuffs.cuffed_cuffer", "&aYou have cuffed {target_name}.");
+        String cufferMsg = configManager.getMessage("handcuffs.cuffed_cuffer");
         cuffer.sendMessage(Utils.color(cufferMsg.replace("{target_name}", cuffed.getName())));
 
         // Звук (если настроено)
@@ -216,7 +216,7 @@ public class CuffManager {
         if (originalCufferUuid == null) {
             // Игрок не в наручниках
             if (remover != null && configManager != null) { // Сообщаем только если есть кому сообщать
-                String msg = configManager.getMessage("handcuffs.not_cuffed", "&c{target_name} is not cuffed.").replace("{target_name}", cuffed.getName());
+                String msg = configManager.getMessage("handcuffs.not_cuffed").replace("{target_name}", cuffed.getName());
                 remover.sendMessage(Utils.color(msg));
             }
             return false;
@@ -240,7 +240,7 @@ public class CuffManager {
 
         if (!canUncuff) {
             if (remover != null && configManager != null) {
-                remover.sendMessage(Utils.color(configManager.getMessage("handcuffs.cant_uncuff", "&cYou cannot uncuff this player.")));
+                remover.sendMessage(Utils.color(configManager.getMessage("handcuffs.cant_uncuff")));
             }
             return false;
         }
@@ -257,11 +257,11 @@ public class CuffManager {
 
         // Отправляем сообщения
         if (configManager != null) {
-            String targetMsg = configManager.getMessage("handcuffs.uncuffed_target", "&aYou have been uncuffed by {remover_name}.");
+            String targetMsg = configManager.getMessage("handcuffs.uncuffed_target");
             cuffed.sendMessage(Utils.color(targetMsg.replace("{remover_name}", removerName)));
 
             if (remover != null && !force) { // Не сообщаем админу при форсе?
-                String removerMsg = configManager.getMessage("handcuffs.uncuffed_remover", "&aYou have uncuffed {target_name}.");
+                String removerMsg = configManager.getMessage("handcuffs.uncuffed_remover");
                 remover.sendMessage(Utils.color(removerMsg.replace("{target_name}", cuffed.getName())));
             }
         }
@@ -326,13 +326,13 @@ public class CuffManager {
 
         // 2. Блэклист - если цель в блэклисте, никогда нельзя
         if (targetFactionId != null && !blacklistFactions.isEmpty() && blacklistFactions.contains(targetFactionId)) {
-            cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.rule_blacklist", "&cYou cannot cuff members of this faction.")));
+            cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.rule_blacklist")));
             return false;
         }
 
         // 3. Запрет на свою фракцию
         if (preventOwnFaction && cufferFactionId != null && cufferFactionId.equals(targetFactionId)) {
-            cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.rule_own_faction", "&cYou cannot cuff members of your own faction.")));
+            cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.rule_own_faction")));
             return false;
         }
 
@@ -341,7 +341,7 @@ public class CuffManager {
             // Исключение: разрешаем STATE на STATE? (Настраивается)
             boolean allowStateOnState = config.getBoolean(pathPrefix + "allow_state_on_state", true);
             if (!(cufferType == FactionType.STATE && allowStateOnState)) {
-                cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.rule_same_type", "&cYou cannot cuff members of the same faction type.")));
+                cuffer.sendMessage(Utils.color(configManager.getMessage("handcuffs.rule_same_type")));
                 return false;
             }
         }

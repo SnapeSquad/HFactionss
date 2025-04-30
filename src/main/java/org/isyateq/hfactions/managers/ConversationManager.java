@@ -51,7 +51,7 @@ public class ConversationManager {
             if (!event.gracefulExit()) {
                 if (officer.isOnline()) {
                     ConfigManager cm = plugin.getConfigManager();
-                    officer.sendMessage(Utils.color(cm != null ? cm.getMessage("fine.conversation_cancelled", "&cFine process cancelled.")
+                    officer.sendMessage(Utils.color(cm != null ? cm.getMessage("fine.conversation_cancelled")
                             : "&cFine process cancelled."));
                 }
             }

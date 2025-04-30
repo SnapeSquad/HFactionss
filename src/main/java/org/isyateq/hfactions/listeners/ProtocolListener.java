@@ -1,6 +1,5 @@
 package org.isyateq.hfactions.listeners;
 
-import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -12,20 +11,15 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 
 // Импорты для Conversation API
-import org.bukkit.conversations.*;
 
 // HFactions Imports
 import org.isyateq.hfactions.HFactions;
-import org.isyateq.hfactions.conversations.FineAmountPrompt; // Импорт Prompt
 import org.isyateq.hfactions.managers.ConfigManager;
 import org.isyateq.hfactions.managers.ItemManager;
 import org.isyateq.hfactions.managers.PlayerManager;
 import org.isyateq.hfactions.managers.ConversationManager; // Нужен ConversationManager
-import org.isyateq.hfactions.models.Faction;
 import org.isyateq.hfactions.models.FactionRank;
 import org.isyateq.hfactions.util.Utils;
-
-import java.util.logging.Level;
 
 public class ProtocolListener implements Listener {
 
@@ -72,7 +66,7 @@ public class ProtocolListener implements Listener {
             // Проверяем, включено ли использование протокола в конфиге
             FileConfiguration config = configManager.getConfig();
             if (config == null || !config.getBoolean("mechanics.fining.use_protocol_item", true)) {
-                officer.sendMessage(configManager.getMessage("fine.protocol_disabled", "&cUsing the protocol item for fining is disabled."));
+                officer.sendMessage(configManager.getMessage("fine.protocol_disabled"));
                 return;
             }
 
@@ -98,25 +92,25 @@ public class ProtocolListener implements Listener {
 
 
             if (!canFine) {
-                officer.sendMessage(configManager.getMessage("fine.no_permission_issue", "&cYou do not have permission or required rank to issue fines."));
+                officer.sendMessage(configManager.getMessage("fine.no_permission_issue"));
                 return;
             }
 
             // Проверяем, не штрафует ли себя
             if (officer.getUniqueId().equals(target.getUniqueId())) {
-                officer.sendMessage(configManager.getMessage("fine.cant_fine_self", "&cYou cannot fine yourself."));
+                officer.sendMessage(configManager.getMessage("fine.cant_fine_self"));
                 return;
             }
 
             // Проверяем, не находится ли офицер уже в диалоге
             if (officer.isConversing()) {
-                officer.sendMessage(Utils.color(configManager.getMessage("conversation.already_active", "&cYou are already in a conversation. Type '/cancel' first.")));
+                officer.sendMessage(Utils.color(configManager.getMessage("conversation.already_active")));
                 return;
             }
 
             // Начинаем диалог через ConversationManager
             conversationManager.startFineConversation(officer, target); // Нужен такой метод в ConversationManager
-            officer.sendMessage(configManager.getMessage("fine.conversation_started", "&eStarted fine process for {target_name}...")
+            officer.sendMessage(configManager.getMessage("fine.conversation_started")
                     .replace("{target_name}", target.getName()));
         }
     }

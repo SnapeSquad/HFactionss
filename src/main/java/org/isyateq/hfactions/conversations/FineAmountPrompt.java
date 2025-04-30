@@ -27,7 +27,7 @@ public class FineAmountPrompt extends NumericPrompt { // Наследуемся 
         String targetName = target != null ? target.getName() : "Unknown Player";
         String prompt = "&eEnter the fine amount for {target_name}:"; // Дефолт
         if (cm != null) {
-            prompt = cm.getMessage("fine.prompt.amount", prompt); // Получаем из конфига
+            prompt = cm.getMessage("fine.prompt.amount"); // Получаем из конфига
         }
         return Utils.color(prompt.replace("{target_name}", targetName));
     }
@@ -51,7 +51,7 @@ public class FineAmountPrompt extends NumericPrompt { // Наследуемся 
         double minFine = cm.getConfig().getDouble("mechanics.fining.min_amount", 10.0);
         double maxFine = cm.getConfig().getDouble("mechanics.fining.max_amount", 5000.0);
         if (amount < minFine || amount > maxFine) {
-            String msg = cm.getMessage("fine.amount_limit", "&cFine amount must be between {min} and {max}.");
+            String msg = cm.getMessage("fine.amount_limit");
             // Используем sendRawMessage, чтобы не добавлялся префикс беседы
             context.getForWhom().sendRawMessage(Utils.color(msg
                     .replace("{min}", vault.format(minFine))
@@ -78,7 +78,7 @@ public class FineAmountPrompt extends NumericPrompt { // Наследуемся 
         ConfigManager cm = plugin.getConfigManager();
         String message = "&cInvalid amount specified. Must be a number."; // Дефолт
         if (cm != null) {
-            message = cm.getMessage("economy.invalid_amount_number", message);
+            message = cm.getMessage("economy.invalid_amount_number");
         }
         // Возвращаем текст ошибки, который будет показан игроку перед повторным запросом prompt
         return Utils.color(message);

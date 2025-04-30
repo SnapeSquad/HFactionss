@@ -1,5 +1,6 @@
 package org.isyateq.hfactions.managers;
 
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.isyateq.hfactions.HFactions;
@@ -10,7 +11,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.List;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 
 public class ConfigManager {
 
@@ -19,7 +23,7 @@ public class ConfigManager {
     private File configFile = null;
 
     private FileConfiguration factionsConfig = null;
-    private File factionsConfigFile = null;
+    public File factionsConfigFile = null;
 
     // playerdata.yml больше не используется напрямую здесь
     // private FileConfiguration playerDataConfig = null;
@@ -176,6 +180,10 @@ public class ConfigManager {
         }
         return territoriesConfig;
     }
+    public long getFactionSaveIntervalTicks() { return Math.max(20L * 10, getConfig().getLong("faction.auto_save_interval_seconds", 300) * 20L); }
+    public String getDefaultFactionColor() { return getConfig().getString("faction.defaults.color", "#FFFFFF"); }
+    public String getDefaultFactionPrefixFormat() { return getConfig().getString("faction.defaults.prefix", "[{id_upper}]"); }
+    public int getDefaultFactionWarehouseSize() { return getConfig().getInt("faction.defaults.warehouse_size", 54); }
 
     // --- Специализированные геттеры для настроек ---
 
@@ -197,13 +205,6 @@ public class ConfigManager {
         return getConfig().getBoolean("general.debug_mode", false);
     }
 
-    public String getMessage(String path, String s) {
-        // TODO: Заменить на получение из lang.yml в будущем
-        String message = getConfig().getString("messages." + path);
-        // Возвращаем сообщение или заглушку, если не найдено
-        return message != null ? Utils.color(message) : Utils.color("&cMessage not found: messages." + path);
-    }
-
     // Вспомогательный метод для загрузки defaults из JAR
     private void loadDefaultsFromJar(String filename, FileConfiguration targetConfig) {
         if (targetConfig == null) return; // Проверка на null
@@ -223,4 +224,73 @@ public class ConfigManager {
             plugin.getLogger().warning("Default configuration file not found in JAR: " + filename);
         }
     }
+    // --- Faction Chat ---
+    public String getFactionChatFormat() { return getConfig().getString("faction_chat.format", "&b[Фракция] {prefix} {player}&f: {message}"); }
+
+    // --- Item Settings (Вспомогательные) ---
+    private String getItemName(String path, String def) { return Utils.color(getConfig().getString(path + ".name", def)); }
+    private List<String> getItemLore(String path) { return getConfig().getStringList(path + ".lore").stream().map(Utils::color).collect(Collectors.toList()); }
+    private String getItemMaterial(String path, String def) { return getConfig().getString(path + ".material", def).toUpperCase(); }
+    private int getItemModelData(String path) { return getConfig().getInt(path + ".custom_model_data", 0); }
+    private String getItemOraxenId(String path) { return getConfig().getString(path + ".oraxen_id"); }
+
+    // --- Тайзер ---
+    public String getTaserOraxenId() { return getItemOraxenId("mechanics.taser"); }
+    public String getTaserName() { return getItemName("mechanics.taser", "&eTaser"); }
+    public List<String> getTaserLore() { return getItemLore("mechanics.taser"); }
+    public String getTaserMaterial() { return getItemMaterial("mechanics.taser", "STICK"); }
+    public int getTaserCustomModelData() { return getItemModelData("mechanics.taser"); }
+    public double getTaserRange() { return Math.max(1.0, getConfig().getDouble("mechanics.taser.range", 10.0)); }
+    public int getTaserCooldownSeconds() { return Math.max(0, getConfig().getInt("mechanics.taser.cooldown_seconds", 5)); }
+
+    // --- Наручники ---
+    public String getHandcuffsOraxenId() { return getItemOraxenId("mechanics.handcuffs"); }
+    public String getHandcuffsName() { return getItemName("mechanics.handcuffs", "&7Handcuffs"); }
+    public List<String> getHandcuffsLore() { return getItemLore("mechanics.handcuffs"); }
+    public String getHandcuffsMaterial() { return getItemMaterial("mechanics.handcuffs", "IRON_INGOT"); }
+    public int getHandcuffsCustomModelData() { return getItemModelData("mechanics.handcuffs"); }
+
+    // --- Штрафы ---
+    public String getProtocolOraxenId() { return getItemOraxenId("mechanics.fining.protocol_item"); }
+    public String getProtocolName() { return getItemName("mechanics.fining.protocol_item", "&cProtocol"); }
+    public List<String> getProtocolLore() { return getItemLore("mechanics.fining.protocol_item"); }
+    public String getProtocolMaterial() { return getItemMaterial("mechanics.fining.protocol_item", "PAPER"); }
+    public int getProtocolCustomModelData() { return getItemModelData("mechanics.fining.protocol_item"); }
+    public boolean useProtocolItem() { return getConfig().getBoolean("mechanics.fining.use_protocol_item", true); }
+    public String getProtocolFactionId() { return getConfig().getString("mechanics.fining.protocol_item_faction", "pd"); }
+    public int getFineMinRank() { return getConfig().getInt("mechanics.fining.fine_min_rank", 2); }
+    public double getFineMinAmount() { return Math.max(0.01, getConfig().getDouble("mechanics.fining.min_amount", 1.0)); }
+    public double getFineMaxAmount() { return Math.max(getFineMinAmount(), getConfig().getDouble("mechanics.fining.max_amount", 10000.0)); }
+    public int getFineCooldownTargetSeconds() { return Math.max(0, getConfig().getInt("mechanics.fining.fine_cooldown_target_seconds", 60)); }
+    public String getFineRecipientType() { return getConfig().getString("mechanics.fining.fine_recipient", "player").toLowerCase(); }
+    public int getFineMaxReasonLength() { return Math.max(1, getConfig().getInt("mechanics.fining.max_reason_length", 100)); }
+
+    // --- Крафт ---
+    public boolean isCraftingEnabled() { return getConfig().getBoolean("crafting.enabled", false); }
+    public ConfigurationSection getCraftingRecipesSection() { return getConfig().getConfigurationSection("crafting.recipes"); }
+
+    /**
+     * Проверяет, включена ли интеграция с Dynmap в конфигурации.
+     * @return true, если включена.
+     */
+    public boolean isDynmapEnabled() { // ***** ДОБАВЛЕН/ПРОВЕРЕН МЕТОД *****
+        return getConfig().getBoolean("integrations.dynmap.enabled", true); // По умолчанию включено
+    }
+    public double getDynmapMarkerOpacity() { return Math.max(0.0, Math.min(1.0, getConfig().getDouble("integrations.dynmap.style.fill_opacity", 0.3))); }
+    public int getDynmapMarkerWeight() { return Math.max(1, getConfig().getInt("integrations.dynmap.style.stroke_weight", 1)); }
+    public double getDynmapMarkerStrokeOpacity() { return Math.max(0.0, Math.min(1.0, getConfig().getDouble("integrations.dynmap.style.stroke_opacity", 0.8))); }
+    public String getDynmapMarkerFormat() { return getConfig().getString("integrations.dynmap.style.popup_format", "<b>{faction_name}</b> ({faction_id})<br/>Type: {faction_type}"); }
+    public long getDynmapUpdateIntervalSeconds() { return Math.max(30, getConfig().getLong("integrations.dynmap.update_interval_seconds", 300)); }
+
+    // --- Наркотики (Заглушки Геттеров) ---
+    public boolean isDrugsEnabled() { return getConfig().getBoolean("mechanics.drugs.enabled", false); }
+
+    // --- Квесты (Заглушки Геттеров) ---
+    public boolean isQuestsEnabled() { return getConfig().getBoolean("quests.enabled", false); }
+
+    // --- Сообщения ---
+    public String getMessage(String path, String defaultMessage, String label, String s, String usage) { String msg = getConfig().getString("messages." + path, defaultMessage); return Utils.color(msg); }
+    public String getMessage(String path) { return getMessage(path, "&cMissing: messages." + path, label, "{usage}", usage); }
+    public List<String> getMessageList(String path) { List<String> msgs = getConfig().getStringList("messages." + path); if (msgs.isEmpty()) return Collections.singletonList(getMessage(path+".<entry>")); return msgs.stream().map(Utils::color).collect(Collectors.toList()); }
+
 }

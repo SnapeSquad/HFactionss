@@ -1,94 +1,40 @@
 package org.isyateq.hfactions.models;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.stream.Collectors;
 
-public class FactionRank {
-    private final int internalId;        // Внутренний ID (1-11)
-    private final String defaultName;    // Имя по умолчанию (из конфига)
-    private String displayName;          // Отображаемое имя (может меняться лидером)
-    private double salary;               // Зарплата
-    private List<String> permissions;    // Дополнительные права этого ранга
+/**
+ * Представляет ранг внутри фракции.
+ */
+public final class FactionRank {
+
+    private final int internalId;
+    private final String defaultName;
+    private String displayName;
+    private double salary;
+    private List<String> permissions;
 
     public FactionRank(int internalId, String defaultName, String displayName, double salary, List<String> permissions) {
+        if (internalId < 1) throw new IllegalArgumentException("Rank ID must be >= 1");
+        if (defaultName == null || defaultName.trim().isEmpty()) throw new IllegalArgumentException("Default name cannot be null/empty");
         this.internalId = internalId;
-        this.defaultName = defaultName;
-        // Если displayName не указан или пуст, используем defaultName
-        this.displayName = (displayName != null && !displayName.isEmpty()) ? displayName : defaultName;
-        this.salary = salary;
-        // Гарантируем, что список permissions не null
-        this.permissions = Objects.requireNonNullElseGet(permissions, ArrayList::new);
+        this.defaultName = defaultName.trim();
+        setDisplayName(displayName); setSalary(salary); setPermissions(permissions);
     }
 
-    // --- Getters ---
-    public int getInternalId() {
-        return internalId;
-    }
+    public int getInternalId() { return internalId; }
+    public String getDefaultName() { return defaultName; }
+    public String getDisplayName() { return displayName; }
+    public double getSalary() { return salary; }
+    public List<String> getPermissions() { return Collections.unmodifiableList(this.permissions); } // Неизменяемая
 
-    public String getDefaultName() {
-        return defaultName;
-    }
+    public void setDisplayName(String displayName) { String t = (displayName != null) ? displayName.trim() : null; this.displayName = (t == null || t.isEmpty()) ? this.defaultName : t; }
+    public void setSalary(double salary) { this.salary = Math.max(0.0, salary); }
+    public void setPermissions(List<String> permissions) { if(permissions==null)this.permissions=new ArrayList<>();else this.permissions=permissions.stream().filter(p->p!=null&&!p.trim().isEmpty()).map(String::trim).distinct().collect(Collectors.toList());}
+    public void resetDisplayName() { setDisplayName(null); }
+    public boolean hasPermission(String permission) { return !(permission==null||permission.trim().isEmpty()) && this.permissions.contains(permission.trim()); }
 
-    public String getDisplayName() {
-        return displayName;
-    }
-
-    public double getSalary() {
-        return salary;
-    }
-
-    public List<String> getPermissions() {
-        // Возвращаем копию, чтобы предотвратить прямое изменение извне? Или оригинал? Пока оригинал.
-        return permissions;
-    }
-
-    // --- Setters (для изменяемых полей) ---
-    public void setDisplayName(String displayName) {
-        // При установке пустого имени возвращаем к дефолтному
-        this.displayName = (displayName != null && !displayName.trim().isEmpty()) ? displayName.trim() : this.defaultName;
-    }
-
-    public void setSalary(double salary) {
-        // Зарплата не может быть отрицательной
-        this.salary = Math.max(0, salary);
-    }
-
-    public void setPermissions(List<String> permissions) {
-        // Гарантируем, что новый список не null
-        this.permissions = Objects.requireNonNullElseGet(permissions, ArrayList::new);
-    }
-
-    // --- Стандартные методы ---
-    @Override
-    public String toString() {
-        return "FactionRank{" +
-                "id=" + internalId +
-                ", name='" + displayName + '\'' +
-                ", salary=" + salary +
-                '}';
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        FactionRank that = (FactionRank) o;
-        // Сравниваем все поля
-        return internalId == that.internalId &&
-                Double.compare(that.salary, salary) == 0 &&
-                Objects.equals(defaultName, that.defaultName) &&
-                Objects.equals(displayName, that.displayName) &&
-                Objects.equals(permissions, that.permissions);
-    }
-
-    @Override
-    public int hashCode() {
-        // Генерируем хеш-код на основе всех полей
-        return Objects.hash(internalId, defaultName, displayName, salary, permissions);
-    }
-
-    public void resetDisplayName() {
-        this.displayName = this.defaultName;
-    }
+    @Override public String toString() { return "FactionRank{id="+internalId+", name='"+displayName+"', salary="+salary+", perms="+permissions.size()+'}'; }
+    @Override public boolean equals(Object o){if(this==o)return true;if(o==null||getClass()!=o.getClass())return false;FactionRank t=(FactionRank)o;return internalId==t.internalId&&Double.compare(t.salary,salary)==0&&defaultName.equals(t.defaultName)&&displayName.equals(t.displayName)&&new HashSet<>(permissions).equals(new HashSet<>(t.permissions));}
+    @Override public int hashCode() { return Objects.hash(internalId, defaultName, displayName, salary, new HashSet<>(permissions)); }
 }

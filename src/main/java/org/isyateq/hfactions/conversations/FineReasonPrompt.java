@@ -36,7 +36,7 @@ public class FineReasonPrompt extends StringPrompt { // Наследуемся �
         String formattedAmount = vault != null ? vault.format(amount) : String.format(Locale.US, "%.2f", amount);
         String prompt = "&eEnter the reason for the fine ({amount}):"; // Дефолт
         if (cm != null) {
-            prompt = cm.getMessage("fine.prompt.reason", prompt);
+            prompt = cm.getMessage("fine.prompt.reason");
         }
         return Utils.color(prompt.replace("{amount}", formattedAmount));
     }
@@ -57,7 +57,7 @@ public class FineReasonPrompt extends StringPrompt { // Наследуемся �
         }
         // Проверяем цель (могла выйти)
         if (target == null || !target.isOnline()) {
-            officer.sendMessage(Utils.color(cm.getMessage("fine.target_offline", "&cTarget player went offline. Fine cancelled.")));
+            officer.sendMessage(Utils.color(cm.getMessage("fine.target_offline")));
             return Prompt.END_OF_CONVERSATION;
         }
 
@@ -68,7 +68,7 @@ public class FineReasonPrompt extends StringPrompt { // Наследуемся �
         // Получаем фракцию офицера (для начисления штрафа)
         Faction officerFaction = pm.getPlayerFaction(officer);
         if (officerFaction == null) {
-            officer.sendMessage(Utils.color(cm.getMessage("fine.error_officer_faction", "&cError: Could not determine your faction. Fine cancelled.")));
+            officer.sendMessage(Utils.color(cm.getMessage("fine.error_officer_faction")));
             return Prompt.END_OF_CONVERSATION;
         }
 
@@ -82,19 +82,19 @@ public class FineReasonPrompt extends StringPrompt { // Наследуемся �
             if (fm.depositToFaction(officerFaction.getId(), amount)) {
                 plugin.getLogger().info("Deposited fine amount " + formattedAmount + " to faction " + officerFaction.getId());
                 // Сообщение оштрафованному
-                String targetMsg = cm.getMessage("fine.target_fined", "&cYou have been fined {amount} by Officer {officer} for: {reason}");
+                String targetMsg = cm.getMessage("fine.target_fined");
                 target.sendMessage(Utils.color(targetMsg
                         .replace("{amount}", formattedAmount)
                         .replace("{officer}", officer.getName())
                         .replace("{reason}", reason)));
                 // Сообщение офицеру
-                String officerMsg = cm.getMessage("fine.officer_success", "&aSuccessfully fined {target} for {amount}. Reason: {reason}");
+                String officerMsg = cm.getMessage("fine.officer_success");
                 officer.sendMessage(Utils.color(officerMsg
                         .replace("{target}", target.getName())
                         .replace("{amount}", formattedAmount)
                         .replace("{reason}", reason)));
                 // Логирование во фракцию
-                String logMsg = cm.getMessage("fine.log", "&eOfficer {officer} fined {target} for {amount}. Reason: {reason}");
+                String logMsg = cm.getMessage("fine.log");
                 pm.broadcastToFaction(officerFaction.getId(), Utils.color(logMsg
                         .replace("{officer}", officer.getName())
                         .replace("{target}", target.getName())
@@ -105,17 +105,17 @@ public class FineReasonPrompt extends StringPrompt { // Наследуемся �
                 // Ошибка начисления во фракцию - возвращаем деньги цели
                 if (vault.deposit(target.getUniqueId(), amount)) {
                     plugin.getLogger().info("Refunded " + formattedAmount + " to target " + target.getName());
-                    target.sendMessage(Utils.color(cm.getMessage("fine.error_refunded", "&aAn error occurred processing your fine, the amount has been refunded.")));
+                    target.sendMessage(Utils.color(cm.getMessage("fine.error_refunded")));
                 } else {
                     plugin.getLogger().severe("CRITICAL ERROR: Failed to refund fine amount " + formattedAmount + " to target " + target.getName());
                     target.sendMessage(Utils.color("&cCRITICAL ERROR: Could not refund your fine amount. Contact admin!"));
                 }
-                officer.sendMessage(cm.getMessage("fine.error_faction_deposit", "&cError depositing fine into faction treasury. Fine cancelled and refunded to target."));
+                officer.sendMessage(cm.getMessage("fine.error_faction_deposit"));
             }
         } else {
             plugin.getLogger().info("Target " + target.getName() + " did not have enough funds (" + formattedAmount + ") for fine by " + officer.getName());
             // Недостаточно средств у цели
-            String msg = cm.getMessage("fine.target_no_money", "&c{target} does not have enough money to pay the fine ({amount}).");
+            String msg = cm.getMessage("fine.target_no_money");
             officer.sendMessage(Utils.color(msg
                     .replace("{target}", target.getName())
                     .replace("{amount}", formattedAmount)));

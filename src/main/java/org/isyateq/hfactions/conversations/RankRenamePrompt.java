@@ -32,7 +32,7 @@ public class RankRenamePrompt extends StringPrompt {
         // Сообщение уже отправлено при начале диалога
         // Можно добавить напоминание
         ConfigManager cm = plugin.getConfigManager();
-        String prompt = cm != null ? cm.getMessage("ranks.rename_prompt", "&eEnter new name or 'cancel'. Current: {old_name}")
+        String prompt = cm != null ? cm.getMessage("ranks.rename_prompt")
                 .replace("{old_name}", oldName)
                 : "&eEnter new name or 'cancel'. Current: " + oldName;
         return Utils.color(prompt);
@@ -54,7 +54,7 @@ public class RankRenamePrompt extends StringPrompt {
         input = input.trim(); // Убираем лишние пробелы
 
         if (input.equalsIgnoreCase("cancel")) {
-            player.sendMessage(cm.getMessage("ranks.rename_cancelled", "&eRank renaming cancelled."));
+            player.sendMessage(cm.getMessage("ranks.rename_cancelled"));
             // Открываем GUI обратно?
             // gm.openRanksGUI(player); // Может вызвать рекурсию или нежелательное поведение
             return Prompt.END_OF_CONVERSATION;
@@ -62,17 +62,17 @@ public class RankRenamePrompt extends StringPrompt {
 
         // Проверка длины и символов? (Опционально)
         if (input.length() > 32) { // Пример лимита
-            player.sendMessage(cm.getMessage("ranks.rename_too_long", "&cNew name is too long (max 32 chars). Please try again or type 'cancel'."));
+            player.sendMessage(cm.getMessage("ranks.rename_too_long"));
             return this; // Остаемся в этом же Prompt
         }
         if (input.isEmpty()) {
-            player.sendMessage(cm.getMessage("ranks.rename_empty", "&cName cannot be empty. Please try again or type 'cancel'."));
+            player.sendMessage(cm.getMessage("ranks.rename_empty"));
             return this; // Остаемся в этом же Prompt
         }
 
         // Сохраняем новое имя
         fm.updateRankDisplayName(factionId, rankId, input);
-        player.sendMessage(cm.getMessage("ranks.rename_success", "&aRank {rank_id} display name changed to: &f{new_name}")
+        player.sendMessage(cm.getMessage("ranks.rename_success")
                 .replace("{rank_id}", String.valueOf(rankId))
                 .replace("{new_name}", input));
 
