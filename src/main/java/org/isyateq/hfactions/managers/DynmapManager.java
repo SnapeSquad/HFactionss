@@ -278,6 +278,19 @@ public final class DynmapManager {
     private void sendNoPermission(CommandSender sender) { sender.sendMessage(configManager.getMessage("error.no_permission")); }
     private void sendPlayerOnly(CommandSender sender) { sender.sendMessage(configManager.getMessage("error.player_only")); }
 
+    public boolean isDynmapEnabled() {
+        // 1. Проверяем настройку в конфиге через ConfigManager
+        boolean enabledInConfig = configManager.isDynmapEnabled(); // Этот метод мы реализовали
+
+        // 2. Проверяем флаг успешной инициализации API (dynmapAvailable)
+        // и наличие самих объектов API (на всякий случай)
+        boolean apiReady = this.dynmapAvailable && this.dynmapApi != null && this.markerApi != null && this.markerSet != null;
+
+        // Интеграция считается полностью включенной и готовой к работе,
+        // только если оба условия выполнены.
+        return enabledInConfig && apiReady;
+    }
+
     // --- Внутренний Класс ---
     private static final class TerritoryData { final String factionId; final String worldName; final List<Double> xCoords; final List<Double> zCoords; TerritoryData(String fId,String w,List<Double>x,List<Double>z){this.factionId=(fId!=null&&!fId.isEmpty())?fId.toLowerCase():null;this.worldName=Objects.requireNonNull(w);this.xCoords=(x!=null)?List.copyOf(x):List.of();this.zCoords=(z!=null)?List.copyOf(z):List.of();} }
 

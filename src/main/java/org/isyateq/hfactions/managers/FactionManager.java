@@ -2,7 +2,6 @@ package org.isyateq.hfactions.managers;
 
 // Bukkit API
 import org.bukkit.Bukkit; // Для шедулера и OfflinePlayer
-import org.bukkit.OfflinePlayer; // Для getPlayerName
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.inventory.ItemStack;
@@ -16,13 +15,9 @@ import org.isyateq.hfactions.util.Utils; // Для сериализации ск
 
 // Утилиты Java
 import java.io.IOException; // Для сохранения файла
-import java.sql.Connection; // Не используется напрямую здесь, но оставлю для контекста
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap; // Потокобезопасная мапа
 import java.util.logging.Level;
-import java.util.stream.Collectors;
 
 /**
  * Управляет фракциями: загрузка, сохранение, создание, удаление, доступ.

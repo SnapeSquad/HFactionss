@@ -1,6 +1,5 @@
 package org.isyateq.hfactions.managers;
 
-import io.th0rgal.oraxen.api.OraxenItems; // Импорт Oraxen API (если используется)
 import org.bukkit.Bukkit;
 import org.bukkit.Keyed;
 import org.bukkit.Material;
@@ -9,11 +8,9 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.*;
-import org.bukkit.inventory.recipe.CraftingBookCategory; // Импорт категории
+import org.bukkit.inventory.recipe.CraftingBookCategory;
 import org.isyateq.hfactions.HFactions;
-import org.isyateq.hfactions.util.Utils; // Для Utils.color
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +22,7 @@ public class CraftingManager {
     private final PlayerManager playerManager; // Зависимость от PlayerManager
     private final ItemManager itemManager; // Нужен для получения кастомных предметов
     private final ConfigManager configManager; // Нужен для чтения конфига
+    public void clearRecipes() {}
 
     // Класс для хранения информации о кастомном рецепте (остается приватным)
     private static class CustomRecipeInfo {
@@ -64,7 +62,6 @@ public class CraftingManager {
     // --- Загрузка рецептов из конфига ---
     public void loadRecipes() {
         customRecipes.clear(); // Очищаем старые данные
-        // TODO: Удалить старые зарегистрированные рецепты из Bukkit? Это сложнее.
         // Bukkit.removeRecipe(key); - нужно итерировать и удалять
 
         FileConfiguration config = configManager.getConfig();
@@ -107,7 +104,6 @@ public class CraftingManager {
                     try {
                         Material material = Material.valueOf(resultType.toUpperCase());
                         resultItem = new ItemStack(material, resultAmount);
-                        // TODO: Добавить поддержку CustomModelData для ванильных предметов, если нужно
                         // int customModelData = recipeData.getInt("result.custom_model_data", -1);
                         // if (customModelData != -1) itemManager.applyCustomModelData(resultItem, customModelData);
                     } catch (IllegalArgumentException e) {
@@ -125,7 +121,7 @@ public class CraftingManager {
                     }
                 }
 
-                if (resultItem == null || resultItem.getType().isAir()) {
+                if (resultItem.getType().isAir()) {
                     plugin.getLogger().warning("Result item is null or AIR for recipe '" + keyName + "'. Skipping recipe.");
                     continue;
                 }
